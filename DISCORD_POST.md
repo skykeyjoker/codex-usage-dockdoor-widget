@@ -51,6 +51,9 @@ to CodexBar for the MIT-licensed quota/pricing compatibility work.
 
 ## Attach these screenshots in this order
 
+Upload the original files without resaving them. They are captured from a
+Retina-backed SwiftUI window so Discord can downscale them cleanly.
+
 1. `assets/dock-layouts.png` — one-, two-, and three-slot Dock presentations.
 2. `assets/panel-overview.png` — quota overview and recent Token usage.
 3. `assets/panel-insights-official.png` — official activity and trends.

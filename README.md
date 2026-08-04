@@ -8,7 +8,9 @@ Dock and a native SwiftUI panel.
 > This widget is distributed independently and is not part of the DockDoor Pro
 > marketplace. Installation is manual.
 
-![One-, two-, and three-slot Dock layouts](assets/dock-layouts.png)
+<p align="center">
+  <img src="assets/dock-layouts.png" width="740" alt="One-, two-, and three-slot Dock layouts">
+</p>
 
 ## Highlights
 
@@ -37,7 +39,7 @@ or conversation.
 
 | Light | Dark |
 | --- | --- |
-| ![Quota overview in light appearance](assets/panel-overview.png) | ![Quota overview in dark appearance](assets/panel-overview-dark.png) |
+| <img src="assets/panel-overview.png" width="360" alt="Quota overview in light appearance"> | <img src="assets/panel-overview-dark.png" width="360" alt="Quota overview in dark appearance"> |
 
 The overview combines account and service health, session/weekly quota,
 reset timing, pace information, recent Token usage, estimated cost, reset
@@ -47,7 +49,7 @@ credits, and optional extra-model quota cards.
 
 | Official activity | Local usage |
 | --- | --- |
-| ![Official Codex activity](assets/panel-insights-official.png) | ![Local Codex usage insights](assets/panel-insights-local.png) |
+| <img src="assets/panel-insights-official.png" width="360" alt="Official Codex activity"> | <img src="assets/panel-insights-local.png" width="360" alt="Local Codex usage insights"> |
 
 - **Official activity** is requested from the installed Codex CLI app-server:
   lifetime Tokens, daily peak, streaks, longest task, one-year activity heatmap,
@@ -60,7 +62,7 @@ credits, and optional extra-model quota cards.
 
 | Projects | Conversations / tasks |
 | --- | --- |
-| ![Project usage summaries](assets/panel-projects.png) | ![Recent conversations and task health](assets/panel-conversations.png) |
+| <img src="assets/panel-projects.png" width="360" alt="Project usage summaries"> | <img src="assets/panel-conversations.png" width="360" alt="Recent conversations and task health"> |
 
 Project rows summarize local usage, sessions, requests, and activity. The
 conversation/task view adds local titles, active/history state, Codex deep
@@ -73,7 +75,7 @@ the list is scrolled.
 
 | OpenAI status | Settings and data health |
 | --- | --- |
-| ![ChatGPT and Codex service status](assets/panel-status.png) | ![Widget settings and data health](assets/panel-settings.png) |
+| <img src="assets/panel-status.png" width="360" alt="ChatGPT and Codex service status"> | <img src="assets/panel-settings.png" width="360" alt="Widget settings and data health"> |
 
 The settings page controls the Dock quota/value, single-slot ring style, theme,
 Dock service-status indicator, Panel extra-model quotas, quota source, refresh

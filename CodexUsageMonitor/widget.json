@@ -1,0 +1,26 @@
+{
+    "id": "codex-usage-monitor",
+    "name": "Codex Usage",
+    "author": "Skykey",
+    "description": "Monitor Codex quota, official activity, local usage, projects, tasks, and OpenAI service status.",
+    "iconSymbol": "terminal.fill",
+    "orientations": ["horizontal", "vertical"],
+    "maxSlotSpan": 3,
+    "principalClass": "CodexUsageMonitorPlugin",
+    "sources": [
+        "CodexUsageMonitorPlugin.swift",
+        "CodexUsageModels.swift",
+        "CodexPricingEngine.swift",
+        "CodexLocalUsageScanner.swift",
+        "CodexAccountInsightsService.swift",
+        "CodexConversationScanner.swift",
+        "CodexCLIQuotaService.swift",
+        "CodexUsageService.swift",
+        "CodexQuotaPace.swift",
+        "CodexUsageMonitor.swift",
+        "CodexUsageMonitorView.swift",
+        "CodexOfficialActivityView.swift",
+        "CodexLocalInsightsView.swift",
+        "CodexUsageMonitorPanel.swift"
+    ]
+}

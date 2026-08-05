@@ -8,19 +8,50 @@ struct CodexLocalInsightsView: View {
     let snapshot: CodexRecentUsageSnapshot
     let primary: Color
     let secondary: Color
+    let tokenFormat: CodexTokenFormat
+    let cardOrder: [CodexPanelCardID]
 
     @Environment(\.colorScheme) private var colorScheme
     @State private var period: Period = .sevenDays
     @State private var hoveredMetric: String?
     @State private var hoveredModel: String?
 
+    init(
+        snapshot: CodexRecentUsageSnapshot,
+        primary: Color,
+        secondary: Color,
+        tokenFormat: CodexTokenFormat,
+        cardOrder: [CodexPanelCardID] = CodexPanelCustomizationSection.localInsights.defaultCards
+    ) {
+        self.snapshot = snapshot
+        self.primary = primary
+        self.secondary = secondary
+        self.tokenFormat = tokenFormat
+        self.cardOrder = cardOrder
+    }
+
     var body: some View {
         VStack(spacing: 12) {
             periodHeader
+            ForEach(cardOrder) { card in
+                localCard(card)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func localCard(_ card: CodexPanelCardID) -> some View {
+        switch card {
+        case .localSummary:
             summaryCard
+        case .localComposition:
             tokenCompositionCard
+        case .localTopModels:
             topModelsCard
+        case .localPricingSource:
             pricingFooter
+        default:
+            EmptyView()
         }
     }
 
@@ -86,7 +117,7 @@ struct CodexLocalInsightsView: View {
                 id: "requests",
                 icon: "arrow.up.arrow.down",
                 title: CodexLocalization.text("请求", "Requests"),
-                value: compactNumber(summary.requestCount),
+                value: compactCount(summary.requestCount),
                 help: CodexLocalization.text(
                     "从本机会话日志识别到的模型请求数",
                     "Model requests identified in local session logs"
@@ -152,7 +183,7 @@ struct CodexLocalInsightsView: View {
 
                 HStack(alignment: .firstTextBaseline, spacing: 4) {
                     Text(value)
-                        .font(.system(size: 14, weight: .bold, design: .rounded))
+                        .font(CodexTypography.tokenNumber(size: 14, weight: .bold))
                         .monospacedDigit()
                         .foregroundStyle(valueColor ?? Color.primary)
                         .lineLimit(1)
@@ -160,7 +191,7 @@ struct CodexLocalInsightsView: View {
 
                     if let detail {
                         Text(detail)
-                            .font(.system(size: 8, weight: .medium))
+                            .font(CodexTypography.tokenNumber(size: 8, weight: .medium))
                             .foregroundStyle(.tertiary)
                             .lineLimit(1)
                             .minimumScaleFactor(0.72)
@@ -203,7 +234,7 @@ struct CodexLocalInsightsView: View {
                 Spacer()
 
                 Text(compactNumber(summary.totalTokens))
-                    .font(.system(size: 10, weight: .semibold, design: .rounded))
+                    .font(CodexTypography.tokenNumber(size: 10, weight: .semibold))
                     .monospacedDigit()
                     .foregroundStyle(.tertiary)
             }
@@ -298,14 +329,14 @@ struct CodexLocalInsightsView: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                 Text(compactNumber(item.value))
-                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                    .font(CodexTypography.tokenNumber(size: 10, weight: .bold))
                     .monospacedDigit()
                     .foregroundStyle(.primary)
                     .lineLimit(1)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .help("\(item.title): \(item.value.formatted(.number.locale(CodexLocalization.locale)))")
+        .help("\(item.title): \(tokenFormat.format(item.value))")
     }
 
     private func ratioPill(icon: String, title: String, value: String) -> some View {
@@ -317,7 +348,7 @@ struct CodexLocalInsightsView: View {
                 .lineLimit(1)
             Spacer(minLength: 2)
             Text(value)
-                .fontWeight(.bold)
+                .font(CodexTypography.tokenNumber(size: 9.5, weight: .bold))
                 .monospacedDigit()
         }
         .font(.system(size: 9.5, weight: .medium))
@@ -407,13 +438,13 @@ struct CodexLocalInsightsView: View {
 
             VStack(alignment: .trailing, spacing: 1) {
                 Text(compactNumber(model.tokens))
-                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                    .font(CodexTypography.tokenNumber(size: 10, weight: .bold))
                     .monospacedDigit()
                 HStack(spacing: 4) {
                     Text(currency(model.estimatedCostUSD))
                     Text(percent(share))
                 }
-                .font(.system(size: 8, weight: .medium))
+                .font(CodexTypography.tokenNumber(size: 8, weight: .medium))
                 .foregroundStyle(.secondary)
                 .monospacedDigit()
             }
@@ -434,7 +465,7 @@ struct CodexLocalInsightsView: View {
         .help(
             "\(model.model)\n"
                 + CodexLocalization.text("Token：", "Tokens: ")
-                + model.tokens.formatted(.number.locale(CodexLocalization.locale))
+                + tokenFormat.format(model.tokens)
                 + "\n"
                 + CodexLocalization.text("API 等价费用：", "API-equivalent cost: ")
                 + currency(model.estimatedCostUSD)
@@ -618,6 +649,10 @@ struct CodexLocalInsightsView: View {
     }
 
     private func compactNumber(_ value: Int) -> String {
+        tokenFormat.format(value)
+    }
+
+    private func compactCount(_ value: Int) -> String {
         let number = Double(max(0, value))
         if number >= 1_000_000_000 {
             return compact(number / 1_000_000_000, suffix: "B")

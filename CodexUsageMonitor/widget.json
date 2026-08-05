@@ -19,6 +19,7 @@
         "CodexQuotaPace.swift",
         "CodexUsageMonitor.swift",
         "CodexUsageMonitorView.swift",
+        "CodexPanelCustomization.swift",
         "CodexOfficialActivityView.swift",
         "CodexLocalInsightsView.swift",
         "CodexUsageMonitorPanel.swift"

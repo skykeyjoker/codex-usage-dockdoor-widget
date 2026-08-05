@@ -1,6 +1,15 @@
 import Foundation
 import SwiftUI
 
+enum CodexTypography {
+    /// Numeric face shared by Token, cost, count, percentage, and duration values.
+    /// Keeping this in one place prevents Insights cards from drifting away from
+    /// the Recent Token Usage card's typography.
+    static func tokenNumber(size: CGFloat, weight: Font.Weight) -> Font {
+        .system(size: size, weight: weight, design: .monospaced)
+    }
+}
+
 enum CodexLocalization {
     static var isChinese: Bool {
         let identifier = Locale.preferredLanguages.first ?? Locale.current.identifier
@@ -775,6 +784,175 @@ enum CodexDisplayMetric: String, CaseIterable, Identifiable {
 
     private var localizedTitles: [String] {
         self == .remaining ? ["显示剩余", "Show remaining"] : ["显示已用", "Show used"]
+    }
+}
+
+enum CodexTokenFormat: String, CaseIterable, Identifiable {
+    case automatic
+    case exact
+    case millionsTwoDecimals
+    case millionsOneDecimal
+    case billionsTwoDecimals
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .automatic:
+            return CodexLocalization.text("自动（240.2M）", "Automatic (240.2M)")
+        case .exact:
+            return CodexLocalization.text("完整（240,176,932）", "Exact (240,176,932)")
+        case .millionsTwoDecimals:
+            return CodexLocalization.text("百万两位（240.18M）", "Millions · 2 decimals (240.18M)")
+        case .millionsOneDecimal:
+            return CodexLocalization.text("百万一位（240.2M）", "Millions · 1 decimal (240.2M)")
+        case .billionsTwoDecimals:
+            return CodexLocalization.text("十亿两位（0.24B）", "Billions · 2 decimals (0.24B)")
+        }
+    }
+
+    static func resolve(title: String) -> CodexTokenFormat {
+        allCases.first { item in
+            title == item.rawValue || item.localizedTitles.contains(title)
+        } ?? .automatic
+    }
+
+    func format(_ value: Int) -> String {
+        format(Int64(value))
+    }
+
+    func format(_ value: Int64) -> String {
+        switch self {
+        case .automatic:
+            return adaptive(value)
+        case .exact:
+            return value.formatted(.number.locale(CodexLocalization.locale))
+        case .millionsTwoDecimals:
+            return fixed(value, divisor: 1_000_000, suffix: "M", fractionDigits: 2)
+        case .millionsOneDecimal:
+            return fixed(value, divisor: 1_000_000, suffix: "M", fractionDigits: 1)
+        case .billionsTwoDecimals:
+            return fixed(value, divisor: 1_000_000_000, suffix: "B", fractionDigits: 2)
+        }
+    }
+
+    private var localizedTitles: [String] {
+        switch self {
+        case .automatic:
+            return ["自动（240.2M）", "Automatic (240.2M)", "自动", "Automatic"]
+        case .exact:
+            return ["完整（240,176,932）", "Exact (240,176,932)", "完整数字", "Exact"]
+        case .millionsTwoDecimals:
+            return ["百万两位（240.18M）", "Millions · 2 decimals (240.18M)"]
+        case .millionsOneDecimal:
+            return ["百万一位（240.2M）", "Millions · 1 decimal (240.2M)"]
+        case .billionsTwoDecimals:
+            return ["十亿两位（0.24B）", "Billions · 2 decimals (0.24B)"]
+        }
+    }
+
+    private func adaptive(_ value: Int64) -> String {
+        let absolute = abs(Double(value))
+        switch absolute {
+        case 1_000_000_000...:
+            return adaptive(value, divisor: 1_000_000_000, suffix: "B")
+        case 1_000_000...:
+            return adaptive(value, divisor: 1_000_000, suffix: "M")
+        case 1_000...:
+            return adaptive(value, divisor: 1_000, suffix: "K")
+        default:
+            return value.formatted(.number.locale(CodexLocalization.locale))
+        }
+    }
+
+    private func adaptive(
+        _ value: Int64,
+        divisor: Double,
+        suffix: String
+    ) -> String {
+        let scaled = Double(value) / divisor
+        let fractionDigits = scaled.magnitude >= 100 ? 1 : 2
+        let number = scaled.formatted(
+            .number
+                .locale(CodexLocalization.locale)
+                .precision(.fractionLength(0...fractionDigits))
+        )
+        return number + suffix
+    }
+
+    private func fixed(
+        _ value: Int64,
+        divisor: Double,
+        suffix: String,
+        fractionDigits: Int
+    ) -> String {
+        let number = (Double(value) / divisor).formatted(
+            .number
+                .locale(CodexLocalization.locale)
+                .precision(.fractionLength(fractionDigits))
+        )
+        return number + suffix
+    }
+}
+
+enum CodexTerminalApplication: String, CaseIterable, Identifiable {
+    case automatic
+    case terminal
+    case ghostty
+    case iTerm2
+    case warp
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .automatic:
+            return CodexLocalization.text("自动", "Automatic")
+        case .terminal:
+            return "Terminal"
+        case .ghostty:
+            return "Ghostty"
+        case .iTerm2:
+            return "iTerm2"
+        case .warp:
+            return "Warp"
+        }
+    }
+
+    var bundleIdentifier: String? {
+        switch self {
+        case .automatic:
+            return nil
+        case .terminal:
+            return "com.apple.Terminal"
+        case .ghostty:
+            return "com.mitchellh.ghostty"
+        case .iTerm2:
+            return "com.googlecode.iterm2"
+        case .warp:
+            return "dev.warp.Warp-Stable"
+        }
+    }
+
+    static func resolve(title: String) -> CodexTerminalApplication {
+        allCases.first { item in
+            title == item.rawValue || item.localizedTitles.contains(title)
+        } ?? .automatic
+    }
+
+    private var localizedTitles: [String] {
+        switch self {
+        case .automatic:
+            return ["自动", "Automatic"]
+        case .terminal:
+            return ["Terminal"]
+        case .ghostty:
+            return ["Ghostty"]
+        case .iTerm2:
+            return ["iTerm2", "iTerm"]
+        case .warp:
+            return ["Warp"]
+        }
     }
 }
 

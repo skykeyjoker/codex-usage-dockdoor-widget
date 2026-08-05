@@ -8,21 +8,56 @@ struct CodexOfficialActivityView: View {
     let snapshot: CodexAccountInsightsSnapshot?
     let primary: Color
     let secondary: Color
+    let tokenFormat: CodexTokenFormat
+    let cardOrder: [CodexPanelCardID]
 
     @Environment(\.colorScheme) private var colorScheme
     @State private var trendMode: TrendMode = .daily
     @State private var hoveredHeatmapDay: HeatmapDay?
 
+    init(
+        snapshot: CodexAccountInsightsSnapshot?,
+        primary: Color,
+        secondary: Color,
+        tokenFormat: CodexTokenFormat,
+        cardOrder: [CodexPanelCardID] = CodexPanelCustomizationSection.officialInsights.defaultCards
+    ) {
+        self.snapshot = snapshot
+        self.primary = primary
+        self.secondary = secondary
+        self.tokenFormat = tokenFormat
+        self.cardOrder = cardOrder
+    }
+
     var body: some View {
         VStack(spacing: 12) {
             if let snapshot, let usage = snapshot.officialUsage {
-                summaryGrid(usage)
-                heatmapCard(usage)
-                trendCard(usage)
-                sourceFooter(snapshot)
+                ForEach(cardOrder) { card in
+                    officialCard(card, usage: usage, snapshot: snapshot)
+                }
             } else {
                 unavailableCard
             }
+        }
+    }
+
+    @ViewBuilder
+    private func officialCard(
+        _ card: CodexPanelCardID,
+        usage: CodexOfficialAccountUsage,
+        snapshot: CodexAccountInsightsSnapshot
+    ) -> some View {
+        switch card {
+        case .officialSummary:
+            summaryGrid(usage)
+        case .officialHeatmap:
+            heatmapCard(usage)
+        case .officialTrend:
+            trendCard(usage)
+        case .officialSource:
+            sourceFooter(snapshot)
+        default:
+            EmptyView()
         }
     }
 
@@ -85,7 +120,7 @@ struct CodexOfficialActivityView: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                 Text(value)
-                    .font(.system(size: 17, weight: .bold, design: .rounded))
+                    .font(CodexTypography.tokenNumber(size: 17, weight: .bold))
                     .monospacedDigit()
                     .foregroundStyle(.primary)
                     .lineLimit(1)
@@ -157,7 +192,7 @@ struct CodexOfficialActivityView: View {
                 .overlay(alignment: .bottomLeading) {
                     if let day = hoveredHeatmapDay {
                         Text(heatmapTooltip(day))
-                            .font(.system(size: 9.5, weight: .semibold))
+                            .font(CodexTypography.tokenNumber(size: 9.5, weight: .semibold))
                             .monospacedDigit()
                             .foregroundStyle(.primary)
                             .padding(.horizontal, 7)
@@ -244,7 +279,7 @@ struct CodexOfficialActivityView: View {
                 Spacer()
                 if let latest = points.last {
                     Text(compactNumber(latest.value))
-                        .fontWeight(.semibold)
+                        .font(CodexTypography.tokenNumber(size: 8.5, weight: .semibold))
                         .monospacedDigit()
                 }
                 Spacer()
@@ -266,6 +301,7 @@ struct CodexOfficialActivityView: View {
                 .lineLimit(1)
             Spacer(minLength: 8)
             Text(relativeDate(snapshot.fetchedAt))
+                .font(CodexTypography.tokenNumber(size: 9.5, weight: .medium))
                 .monospacedDigit()
                 .lineLimit(1)
         }
@@ -420,29 +456,7 @@ struct CodexOfficialActivityView: View {
     }
 
     private func compactNumber(_ value: Int64) -> String {
-        let absolute = abs(Double(value))
-        let divisor: Double
-        let suffix: String
-        switch absolute {
-        case 1_000_000_000...:
-            divisor = 1_000_000_000
-            suffix = "B"
-        case 1_000_000...:
-            divisor = 1_000_000
-            suffix = "M"
-        case 1_000...:
-            divisor = 1_000
-            suffix = "K"
-        default:
-            return value.formatted(.number.locale(CodexLocalization.locale))
-        }
-
-        let number = value.formatted(
-            .number
-                .locale(CodexLocalization.locale)
-                .precision(.fractionLength(absolute / divisor >= 100 ? 0 : 1))
-        )
-        return number + suffix
+        tokenFormat.format(value)
     }
 
     private func dayCount(_ value: Int64?) -> String {
@@ -730,7 +744,7 @@ private struct CompactTrendChart: View {
             Text(tooltipDate(point.date))
                 .font(.system(size: 8.5, weight: .semibold))
             Text("\(mode.tooltipMetric) · \(formattedValue)")
-                .font(.system(size: 8, weight: .semibold, design: .monospaced))
+                .font(CodexTypography.tokenNumber(size: 8, weight: .semibold))
                 .foregroundStyle(primary)
                 .lineLimit(1)
         }

@@ -46,8 +46,8 @@ struct CodexUsageMonitorView: View {
             Group {
                 switch slotSpan {
                 case .compact: compactLayout(at: context.date)
-                case .extended: extendedLayout
-                case .triple: tripleLayout
+                case .extended: extendedLayout(at: context.date)
+                case .triple: tripleLayout(at: context.date)
                 }
             }
             .onChange(of: context.date) { _, _ in monitor.syncConfiguration() }
@@ -132,17 +132,28 @@ struct CodexUsageMonitorView: View {
         return CodexRingStyle.carouselStyles[index]
     }
 
-    private var extendedLayout: some View {
-        Group {
+    private func extendedLayout(at date: Date) -> some View {
+        let style = activeRingStyle(at: date)
+        return Group {
             if let window = monitor.window(for: displayLimit) {
                 if isVertical {
                     VStack(spacing: dim * 0.08) {
-                        solidPie(window, size: dim * 0.72)
+                        multiSlotRing(
+                            window,
+                            style: style,
+                            size: dim * 0.82,
+                            showsValue: false
+                        )
                         metric(window, centered: true)
                     }
                 } else {
-                    HStack(spacing: dim * 0.12) {
-                        solidPie(window, size: dim * 0.72)
+                    HStack(spacing: dim * 0.08) {
+                        multiSlotRing(
+                            window,
+                            style: style,
+                            size: dim * 0.82,
+                            showsValue: false
+                        )
                         metric(window, centered: false)
                     }
                 }
@@ -150,21 +161,36 @@ struct CodexUsageMonitorView: View {
                 emptyState(compact: false)
             }
         }
-        .padding(dim * 0.09)
+        .padding(dim * 0.08)
     }
 
-    private var tripleLayout: some View {
-        Group {
+    private func tripleLayout(at date: Date) -> some View {
+        let style = activeRingStyle(at: date)
+        return Group {
             if let usage = monitor.usage {
                 if isVertical {
                     VStack(spacing: dim * 0.10) {
-                        if let weekly = usage.weeklyWindow { gauge(weekly, size: dim * 0.66) }
+                        if let weekly = usage.weeklyWindow {
+                            multiSlotRing(
+                                weekly,
+                                style: style,
+                                size: dim * 0.82,
+                                showsValue: true
+                            )
+                        }
                         limitsStack(usage)
                         if showStatus { serviceBadge }
                     }
                 } else {
-                    HStack(spacing: dim * 0.12) {
-                        if let weekly = usage.weeklyWindow { gauge(weekly, size: dim * 0.68) }
+                    HStack(spacing: dim * WidgetMetrics.spacingScale) {
+                        if let weekly = usage.weeklyWindow {
+                            multiSlotRing(
+                                weekly,
+                                style: style,
+                                size: dim * 0.82,
+                                showsValue: true
+                            )
+                        }
                         limitsStack(usage)
                         if showStatus {
                             Rectangle()
@@ -178,33 +204,52 @@ struct CodexUsageMonitorView: View {
                 emptyState(compact: false)
             }
         }
-        .padding(dim * 0.09)
+        .padding(isVertical ? dim * 0.04 : dim * 0.08)
     }
 
-    private func gauge(_ window: CodexQuotaWindow, size: CGFloat) -> some View {
+    private func multiSlotRing(
+        _ window: CodexQuotaWindow,
+        style: CodexRingStyle,
+        size: CGFloat,
+        showsValue: Bool
+    ) -> some View {
         ZStack {
-            CodexQuotaRing(
-                progress: progress(window),
-                gradient: ringGradient(window),
-                lineWidth: max(3, size * 0.12)
-            )
-            VStack(spacing: 0) {
-                Text(percent(window), format: .number.precision(.fractionLength(0)))
-                    .font(.system(size: size * 0.26, weight: .bold, design: .rounded).monospacedDigit())
+            switch style {
+            case .classic, .carousel:
+                CodexQuotaRing(
+                    progress: progress(window),
+                    gradient: ringGradient(window),
+                    lineWidth: max(size * 0.10, 3)
+                )
+            case .concentric:
+                CodexQuarterRings(
+                    progress: progress(window),
+                    colors: ringColors(window)
+                )
+            case .segmented:
+                CodexSegmentedRing(
+                    progress: progress(window),
+                    gradient: ringGradient(window),
+                    lineWidth: max(size * 0.10, 3)
+                )
+            }
+
+            if showsValue && style != .concentric {
+                Text("\(Int(percent(window).rounded()))%")
+                    .font(.system(
+                        size: max(12, size * 0.18),
+                        weight: .bold,
+                        design: .rounded
+                    ).monospacedDigit())
                     .foregroundStyle(valueTint(window))
-                Text(displayMetric == .remaining
-                    ? CodexLocalization.text("% 剩余", "% LEFT")
-                    : CodexLocalization.text("% 已用", "% USED"))
-                    .font(.system(size: size * 0.085, weight: .bold))
-                    .foregroundStyle(.secondary)
+                    .minimumScaleFactor(0.68)
+                    .lineLimit(1)
             }
         }
         .frame(width: size, height: size)
-    }
-
-    private func solidPie(_ window: CodexQuotaWindow, size: CGFloat) -> some View {
-        CodexSolidPie(progress: progress(window), colors: theme)
-            .frame(width: size, height: size)
+        .id(style)
+        .transition(.opacity.combined(with: .scale(scale: 0.96)))
+        .animation(.easeInOut(duration: 0.35), value: style)
     }
 
     private func metric(_ window: CodexQuotaWindow, centered: Bool) -> some View {
@@ -212,34 +257,43 @@ struct CodexUsageMonitorView: View {
             ? CodexLocalization.text("剩余", "remaining")
             : CodexLocalization.text("已用", "used")
 
-        return VStack(alignment: centered ? .center : .leading, spacing: dim * 0.035) {
+        return VStack(alignment: centered ? .center : .leading, spacing: dim * 0.03) {
             HStack(spacing: dim * 0.045) {
                 Text(displayLimit == .weekly
                     ? CodexLocalization.text("每周", "WEEKLY")
                     : CodexLocalization.text("短周期", "SESSION"))
-                    .font(.system(size: dim * 0.13, weight: .bold))
+                    .font(.system(size: max(9, dim * 0.125), weight: .semibold))
                 if showStatus { compactStatusDot }
             }
-            Text("\(Int(percent(window).rounded()))% \(metricLabel)")
-                .font(.system(size: dim * 0.19, weight: .bold, design: .rounded).monospacedDigit())
-                .foregroundStyle(valueTint(window))
-                .lineLimit(1)
-                .minimumScaleFactor(0.6)
-            Text(window.resetDescription())
-                .font(.system(size: dim * 0.085, weight: .medium))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .minimumScaleFactor(0.55)
+            HStack(alignment: .firstTextBaseline, spacing: dim * 0.025) {
+                Text("\(Int(percent(window).rounded()))%")
+                    .font(.system(
+                        size: max(13, dim * 0.18),
+                        weight: .bold,
+                        design: .rounded
+                    ).monospacedDigit())
+                    .foregroundStyle(valueTint(window))
+                Text(metricLabel)
+                    .font(.system(
+                        size: max(9, dim * 0.115),
+                        weight: .medium,
+                        design: .rounded
+                    ))
+                    .foregroundStyle(.secondary)
+            }
+            .lineLimit(1)
+            .minimumScaleFactor(0.72)
+            remainingBar(window, width: dim * 0.82)
             if monitor.isRefreshing {
                 Text(CodexLocalization.text("更新中…", "Updating…"))
-                    .font(.system(size: dim * 0.075, weight: .semibold))
+                    .font(.system(size: max(7, dim * 0.09), weight: .semibold))
                     .foregroundStyle(theme.primary)
             }
         }
     }
 
     private func limitsStack(_ usage: CodexUsageSnapshot) -> some View {
-        VStack(alignment: isVertical ? .center : .leading, spacing: dim * 0.07) {
+        VStack(alignment: isVertical ? .center : .leading, spacing: dim * 0.055) {
             if let weekly = usage.weeklyWindow {
                 miniLimit(title: CodexLocalization.text("每周", "Weekly"), window: weekly)
             }
@@ -248,7 +302,7 @@ struct CodexUsageMonitorView: View {
             }
             if usage.sessionWindow == nil, let reset = usage.resetCreditsAvailable {
                 Text(CodexLocalization.text("重置额度 \(reset) 次", "\(reset) quota resets"))
-                    .font(.system(size: dim * 0.085, weight: .semibold))
+                    .font(.system(size: max(8, dim * 0.10), weight: .semibold))
                     .foregroundStyle(.secondary)
             }
         }
@@ -263,17 +317,29 @@ struct CodexUsageMonitorView: View {
                 Text("\(Int(window.remainingPercent.rounded()))%")
                     .fontWeight(.bold)
             }
-            .font(.system(size: dim * 0.105, design: .rounded).monospacedDigit())
-            GeometryReader { proxy in
-                ZStack(alignment: .leading) {
-                    Capsule().fill(Color.primary.opacity(0.10))
-                    Capsule()
-                        .fill(tint(window))
-                        .frame(width: proxy.size.width * window.remainingRatio)
-                }
-            }
-            .frame(width: dim * 0.82, height: max(3, dim * 0.045))
+            .font(.system(
+                size: max(9, dim * 0.125),
+                weight: .medium,
+                design: .rounded
+            ).monospacedDigit())
+            remainingBar(window, width: dim * 0.82)
         }
+    }
+
+    private func remainingBar(
+        _ window: CodexQuotaWindow,
+        width: CGFloat
+    ) -> some View {
+        GeometryReader { proxy in
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(Color.primary.opacity(0.10))
+                Capsule()
+                    .fill(tint(window))
+                    .frame(width: proxy.size.width * window.remainingRatio)
+            }
+        }
+        .frame(width: width, height: max(3, dim * 0.045))
     }
 
     private var serviceBadge: some View {
@@ -286,10 +352,10 @@ struct CodexUsageMonitorView: View {
                 .overlay(Circle().stroke(Color.white.opacity(0.35), lineWidth: 1))
                 .shadow(color: statusColor.opacity(0.28), radius: 4)
             Text(CodexLocalization.text("状态", "STATUS"))
-                .font(.system(size: dim * 0.07, weight: .bold))
+                .font(.system(size: max(7, dim * 0.085), weight: .bold))
                 .foregroundStyle(.secondary)
             Text(status.label)
-                .font(.system(size: dim * 0.085, weight: .semibold))
+                .font(.system(size: max(8, dim * 0.10), weight: .semibold))
                 .lineLimit(1)
         }
         .frame(minWidth: dim * 0.65)

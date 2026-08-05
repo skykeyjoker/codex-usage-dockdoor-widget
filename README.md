@@ -8,6 +8,20 @@ Dock and a native SwiftUI panel.
 > This widget is distributed independently and is not part of the DockDoor Pro
 > marketplace. Installation is manual.
 
+## What's new in 1.1.0
+
+- Choose **Simplified**, **Full**, or **Custom** Panel content. Individual
+  pages and cards can be hidden, and cards can be reordered within each page.
+- Format Token values automatically, exactly, in millions, or in billions.
+- Add an optional bottom quick-launch bar for **GPT Classic**, **Codex
+  Desktop**, and **Codex CLI**, with per-button visibility and a selectable
+  terminal.
+- Codex CLI conversations are identified from local session metadata and can
+  be resumed in the selected terminal; Desktop conversations continue to open
+  in Codex Desktop.
+- Smoother conversation-hover metrics, more readable two-/three-slot Dock
+  layouts, and consistent native glass cards across the Panel.
+
 <p align="center">
   <img src="assets/dock-layouts.png" width="740" alt="One-, two-, and three-slot Dock layouts">
 </p>
@@ -25,6 +39,11 @@ Dock and a native SwiftUI panel.
   model breakdown, project breakdown, and period comparison.
 - Recent projects and conversations/tasks, Codex deep links, context health,
   TTFT, average task duration, completed/aborted turns, and compactions.
+- Simplified/full presets plus per-page and per-card visibility/order controls,
+  so casual and advanced users can choose how much information each Panel page
+  shows.
+- Configurable Token-number formatting and an optional quick-launch bar for
+  GPT Classic, Codex Desktop, and Codex CLI.
 - ChatGPT and Codex component status from `status.openai.com`.
 - Automatic English/Chinese UI, light/dark appearance support, and seven color themes.
 - Universal bundle for both Apple Silicon (`arm64`) and Intel (`x86_64`) Macs.
@@ -67,9 +86,10 @@ credits, and optional extra-model quota cards.
 Project rows summarize local usage, sessions, requests, and activity. The
 conversation/task view adds local titles, active/history state, Codex deep
 links, context-window health, reasoning/compaction information, TTFT, average
-duration, and aborted-turn counts. Hovering a conversation switches the health
-cards to that session; a compact floating HUD keeps those metrics visible while
-the list is scrolled.
+duration, and aborted-turn counts. Hovering a conversation smoothly switches
+the health cards to that session; a compact floating HUD keeps those metrics
+visible while the list is scrolled. CLI-origin conversations resume through
+the selected terminal, while Desktop-origin conversations open in Codex.
 
 ### Service status and settings
 
@@ -77,9 +97,11 @@ the list is scrolled.
 | --- | --- |
 | <img src="assets/panel-status.png" width="360" alt="ChatGPT and Codex service status"> | <img src="assets/panel-settings.png" width="360" alt="Widget settings and data health"> |
 
-The settings page controls the Dock quota/value, single-slot ring style, theme,
-Dock service-status indicator, Panel extra-model quotas, quota source, refresh
-interval, links, and per-source health diagnostics.
+The settings page controls the Dock quota/value, ring style across all slot
+sizes, theme, Dock service-status indicator, Token format, Panel content
+presets, page/card visibility and order, quick-launch buttons, preferred
+terminal, quota source, refresh interval, links, and per-source health
+diagnostics.
 
 ## Requirements
 
@@ -155,16 +177,28 @@ The script rejects a bundle unless its executable contains both `arm64` and
 | --- | --- | --- |
 | Primary quota | Weekly / Session | Selects the quota shown in the Dock. |
 | Value | Remaining / Used | Selects percentage semantics. |
-| Single-Slot Ring | Classic / Concentric / Segmented / Auto Carousel | Changes the one-slot visualization. |
+| Ring Style | Classic / Concentric / Segmented / Auto Carousel | Changes the visualization across one-, two-, and three-slot layouts. |
 | Theme | System Accent, Codex Teal, Ocean, Violet, Blue Magenta, Mint, Sunset | Applies adaptive light/dark highlights. |
 | Show service status | On / Off | Adds the current OpenAI health indicator to the Dock. |
-| Show extra model quotas | On / Off | Controls extra-model quota cards in the Panel only. |
+| Token format | Automatic / Exact / Millions (2 decimals) / Millions (1 decimal) / Billions (2 decimals) | Controls Token-number rounding throughout the Panel. |
+| Panel content preset | Simplified / Full / Custom | Applies a compact default, shows every card, or preserves individual choices. |
+| Page visibility | Quota overview / Usage insights / Projects & tasks / OpenAI status | Hides entire content pages while keeping at least one page available. |
+| Card visibility and order | Per Panel section | Chooses and reorders cards while keeping at least one card in each visible section. |
+| Bottom quick-launch bar | On / Off | Shows or hides the persistent launcher at the bottom of the Panel. |
+| Quick-launch buttons | GPT Classic / Codex Desktop / Codex CLI | Independently selects which launch targets appear. |
+| CLI terminal | Automatic / Terminal / Ghostty / iTerm2 / Warp | Selects the terminal used by the CLI launcher and CLI conversation resume. |
 | Quota usage source | Automatic / OAuth API / CLI RPC | Controls session and weekly quota fetching only. |
 | Refresh interval | 1 / 5 / 15 / 30 minutes | Controls scheduled refresh. |
 
 **Automatic** tries the OAuth quota endpoint first and falls back to the local
 CLI only for missing/expired local sign-in cases. Local Token/cost analytics,
 official activity, pricing, and status refresh independently of this choice.
+
+The standalone CLI shortcut opens the selected terminal and types `codex`
+without executing it. Clicking a conversation identified as a Codex CLI
+session opens the selected terminal and runs `codex resume` for that session.
+GPT Classic opens the installed legacy ChatGPT desktop app when available and
+falls back to the ChatGPT website otherwise.
 
 ## Data sources and network access
 
@@ -198,6 +232,8 @@ source.
 - The recent-conversation feature reads a local first-user-message/title for
   display. That title remains in memory for the current process and is not
   written to a widget cache.
+- Quick launch uses only local application discovery and local session IDs.
+  It does not send launch or resume activity to a developer-operated service.
 - DockDoor Pro `UserDefaults` stores widget settings and aggregate snapshots.
   Those snapshots can include account email/plan, quota, status, project paths,
   session IDs, Token totals, costs, and health metrics, but not OAuth Tokens.
@@ -258,6 +294,15 @@ removes unrelated DockDoor Pro settings, so it is not recommended.
 
 The installed Codex app-server must support `account/usage/read`. Local usage
 insights remain available independently.
+
+### A CLI shortcut opens the terminal but does not type anything
+
+- Confirm the preferred terminal is installed, or select **Terminal**.
+- Allow DockDoor Pro to control keyboard input in macOS Privacy & Security if
+  macOS asks for permission.
+- The standalone shortcut intentionally types `codex` without pressing Return.
+  A CLI conversation row executes `codex resume` because the row itself is an
+  explicit resume action.
 
 ### Local usage or cost looks incomplete
 

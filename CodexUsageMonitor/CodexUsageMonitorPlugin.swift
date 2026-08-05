@@ -32,7 +32,7 @@ final class CodexUsageMonitorPlugin: WidgetPlugin, DockDoorWidgetProvider {
             ),
             .picker(
                 key: "ringStyle",
-                label: CodexLocalization.text("单槽圆环", "Single-Slot Ring"),
+                label: CodexLocalization.text("圆环样式", "Ring Style"),
                 options: CodexRingStyle.allCases.map(\.title),
                 defaultValue: CodexRingStyle.concentric.title
             ),
@@ -54,17 +54,44 @@ final class CodexUsageMonitorPlugin: WidgetPlugin, DockDoorWidgetProvider {
                 options: CodexRefreshInterval.allCases.map(\.title),
                 defaultValue: CodexRefreshInterval.fiveMinutes.title
             ),
+            .picker(
+                key: "tokenFormat",
+                label: CodexLocalization.text("Panel Token 格式", "Panel Token Format"),
+                options: CodexTokenFormat.allCases.map(\.title),
+                defaultValue: CodexTokenFormat.automatic.title
+            ),
             .toggle(
-                key: "showStatus",
-                label: CodexLocalization.text("Dock 显示服务状态", "Show Service Status in Dock"),
+                key: "showQuickLaunchBar",
+                label: CodexLocalization.text("Panel 显示快捷启动栏", "Show Quick Launch Bar in Panel"),
                 defaultValue: true
             ),
             .toggle(
-                key: "showExtraModelQuotas",
+                key: "showCodexLaunch",
+                label: CodexLocalization.text("快捷栏显示 Codex Desktop", "Show Codex Desktop Shortcut"),
+                defaultValue: true
+            ),
+            .toggle(
+                key: "showGPTClassicLaunch",
                 label: CodexLocalization.text(
-                    "Panel 显示额外模型额度",
-                    "Show Extra Model Quotas in Panel"
+                    "快捷栏显示 ChatGPT Classic",
+                    "Show ChatGPT Classic Shortcut"
                 ),
+                defaultValue: true
+            ),
+            .toggle(
+                key: "showCLILaunch",
+                label: CodexLocalization.text("快捷栏显示 Codex CLI", "Show Codex CLI Shortcut"),
+                defaultValue: true
+            ),
+            .picker(
+                key: "preferredTerminal",
+                label: CodexLocalization.text("Codex CLI 终端", "Codex CLI Terminal"),
+                options: CodexTerminalApplication.allCases.map(\.title),
+                defaultValue: CodexTerminalApplication.automatic.title
+            ),
+            .toggle(
+                key: "showStatus",
+                label: CodexLocalization.text("Dock 显示服务状态", "Show Service Status in Dock"),
                 defaultValue: true
             ),
         ]
@@ -96,6 +123,14 @@ final class CodexUsageMonitorPlugin: WidgetPlugin, DockDoorWidgetProvider {
         if let value = defaults.string(forKey: prefix + "refreshInterval") {
             let normalized = CodexRefreshInterval.resolve(title: value).title
             if value != normalized { defaults.set(normalized, forKey: prefix + "refreshInterval") }
+        }
+        if let value = defaults.string(forKey: prefix + "tokenFormat") {
+            let normalized = CodexTokenFormat.resolve(title: value).title
+            if value != normalized { defaults.set(normalized, forKey: prefix + "tokenFormat") }
+        }
+        if let value = defaults.string(forKey: prefix + "preferredTerminal") {
+            let normalized = CodexTerminalApplication.resolve(title: value).title
+            if value != normalized { defaults.set(normalized, forKey: prefix + "preferredTerminal") }
         }
     }
 

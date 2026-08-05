@@ -26,8 +26,16 @@ struct CodexUsageMonitorPanel: View {
     @State private var colorTheme = CodexColorTheme.codex
     @State private var quotaUsageSource = CodexQuotaUsageSource.automatic
     @State private var refreshInterval = CodexRefreshInterval.fiveMinutes
+    @State private var tokenFormat = CodexTokenFormat.automatic
     @State private var showStatus = true
-    @State private var showExtraModelQuotas = true
+    @State private var showQuickLaunchBar = true
+    @State private var showCodexLaunch = true
+    @State private var showGPTClassicLaunch = true
+    @State private var showCLILaunch = true
+    @State private var preferredTerminal = CodexTerminalApplication.automatic
+    @State private var panelCardConfiguration = CodexPanelCardConfiguration.full
+    @State private var isPanelPageVisibilityExpanded = true
+    @State private var expandedPanelCustomizationSection: CodexPanelCustomizationSection?
     #if CODEX_USAGE_TESTING
     @State private var insightsSection: CodexInsightsSection = {
         UserDefaults.standard.string(forKey: "codexUsage.testing.insightsSection") == "local"
@@ -45,6 +53,7 @@ struct CodexUsageMonitorPanel: View {
     #endif
     @State private var selectedProjectPath: String?
     @State private var hoveredConversationID: String?
+    @State private var conversationHoverSequence = 0
     @State private var hoveredUsageDayID: String?
     @State private var hoveredUsageLocation: CGPoint?
     @State private var usageTooltipSize = CGSize(width: 126, height: 80)
@@ -72,6 +81,10 @@ struct CodexUsageMonitorPanel: View {
     private let panelContentWidth: CGFloat = 332
     private var theme: CodexThemeColors { colorTheme.colors(for: appearance) }
     private let panelHeight: CGFloat = 520
+    private var shouldShowQuickLaunchBar: Bool {
+        showQuickLaunchBar && (showCodexLaunch || showGPTClassicLaunch || showCLILaunch)
+    }
+    private var quickLaunchBarHeight: CGFloat { shouldShowQuickLaunchBar ? 40 : 0 }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -94,7 +107,7 @@ struct CodexUsageMonitorPanel: View {
             }
             .frame(
                 width: panelWidth,
-                height: panelHeight,
+                height: panelHeight - quickLaunchBarHeight,
                 alignment: .topLeading
             )
             .scrollIndicators(.hidden)
@@ -106,18 +119,19 @@ struct CodexUsageMonitorPanel: View {
                     .padding(.top, 8)
                     .zIndex(30)
                     .animation(
-                        .spring(response: 0.26, dampingFraction: 0.86),
+                        .easeInOut(duration: 0.18),
                         value: hoveredConversationID
                     )
+            }
+
+            if shouldShowQuickLaunchBar {
+                CodexGlassDivider()
+                quickLaunchBar
             }
         }
         .frame(width: panelWidth, alignment: .leading)
         .environment(\.codexCardTheme, theme)
         .background(panelBackground)
-        .overlay(panelBorder)
-        .shadow(color: theme.primary.opacity(0.16), radius: 22, x: -5)
-        .shadow(color: theme.secondary.opacity(0.10), radius: 22, x: 5)
-        .shadow(color: .black.opacity(0.30), radius: 14, y: 6)
         .opacity(appeared ? 1 : 0)
         .onAppear {
             #if !CODEX_USAGE_TESTING
@@ -133,12 +147,18 @@ struct CodexUsageMonitorPanel: View {
             #if !CODEX_USAGE_TESTING
             hoveredHeaderPage = nil
             #endif
+            conversationHoverSequence += 1
             hoveredConversationID = nil
         }
         .onChange(of: page) { _, newPage in
             if newPage != .work {
+                conversationHoverSequence += 1
                 hoveredConversationID = nil
             }
+        }
+        .onChange(of: workSection) { _, _ in
+            conversationHoverSequence += 1
+            hoveredConversationID = nil
         }
         .onChange(of: monitor.settingsRevision) { _, _ in
             loadSettings()
@@ -185,26 +205,13 @@ struct CodexUsageMonitorPanel: View {
                 )
             }
 
-            headerButton(
-                symbol: "gauge.with.dots.needle.67percent",
-                target: .overview,
-                help: CodexLocalization.text("额度总览与消耗节奏", "Quota overview and pace")
-            )
-            headerButton(
-                symbol: "chart.xyaxis.line",
-                target: .insights,
-                help: CodexLocalization.text("官方活动与本地用量洞察", "Official activity and local insights")
-            )
-            headerButton(
-                symbol: "bubble.left.and.text.bubble.right.fill",
-                target: .work,
-                help: CodexLocalization.text("项目、对话与任务效率", "Projects, conversations, and task efficiency")
-            )
-            headerButton(
-                symbol: "waveform.path.ecg",
-                target: .status,
-                help: CodexLocalization.text("ChatGPT / Codex 服务状态", "ChatGPT / Codex service status")
-            )
+            ForEach(panelCardConfiguration.visiblePages) { configurablePage in
+                headerButton(
+                    symbol: configurablePage.symbol,
+                    target: configurablePage.panelPage,
+                    help: configurablePage.navigationHelp
+                )
+            }
             headerButton(
                 symbol: "gearshape.fill",
                 target: .settings,
@@ -325,32 +332,50 @@ struct CodexUsageMonitorPanel: View {
     private var overviewPage: some View {
         VStack(alignment: .leading, spacing: 14) {
             if let usage = monitor.usage {
-                accountRow(usage)
-                if let weekly = usage.weeklyWindow {
-                    quotaHero(weekly)
+                ForEach(panelCardConfiguration.visibleCards(in: .overview)) { card in
+                    overviewCard(card, usage: usage)
                 }
-                if let session = usage.sessionWindow {
-                    quotaCard(
-                        session,
-                        title: CodexLocalization.text("短周期额度", "Session quota"),
-                        symbol: "timer"
-                    )
-                }
-                if let recentUsage = monitor.recentUsage {
-                    recentTokenUsageCard(recentUsage)
-                } else if monitor.tokenUsageError == nil {
-                    recentTokenUsageLoadingCard
-                }
-                resetAndCredits(usage)
-                if showExtraModelQuotas, !usage.extraWindows.isEmpty {
-                    extraLimits(usage.extraWindows)
-                }
-                overviewFooter(usage)
             } else if let error = monitor.usageError {
                 errorCard(error)
             } else {
                 loadingCard
             }
+        }
+    }
+
+    @ViewBuilder
+    private func overviewCard(_ card: CodexPanelCardID, usage: CodexUsageSnapshot) -> some View {
+        switch card {
+        case .overviewAccount:
+            accountRow(usage)
+        case .overviewWeeklyQuota:
+            if let weekly = usage.weeklyWindow {
+                quotaHero(weekly)
+            }
+        case .overviewSessionQuota:
+            if let session = usage.sessionWindow {
+                quotaCard(
+                    session,
+                    title: CodexLocalization.text("短周期额度", "Session quota"),
+                    symbol: "timer"
+                )
+            }
+        case .overviewRecentUsage:
+            if let recentUsage = monitor.recentUsage {
+                recentTokenUsageCard(recentUsage)
+            } else if monitor.tokenUsageError == nil {
+                recentTokenUsageLoadingCard
+            }
+        case .overviewQuotaSupplement:
+            resetAndCredits(usage)
+        case .overviewExtraModels:
+            if !usage.extraWindows.isEmpty {
+                extraLimits(usage.extraWindows)
+            }
+        case .overviewFooter:
+            overviewFooter(usage)
+        default:
+            EmptyView()
         }
     }
 
@@ -363,14 +388,18 @@ struct CodexUsageMonitorPanel: View {
                 CodexOfficialActivityView(
                     snapshot: monitor.accountInsights,
                     primary: theme.primary,
-                    secondary: theme.secondary
+                    secondary: theme.secondary,
+                    tokenFormat: tokenFormat,
+                    cardOrder: panelCardConfiguration.visibleCards(in: .officialInsights)
                 )
             case .local:
                 if let snapshot = monitor.recentUsage {
                     CodexLocalInsightsView(
                         snapshot: snapshot,
                         primary: theme.primary,
-                        secondary: theme.secondary
+                        secondary: theme.secondary,
+                        tokenFormat: tokenFormat,
+                        cardOrder: panelCardConfiguration.visibleCards(in: .localInsights)
                     )
                 } else if let error = monitor.tokenUsageError {
                     errorCard(error)
@@ -822,9 +851,9 @@ struct CodexUsageMonitorPanel: View {
                 .font(.system(size: 9, weight: .medium))
                 .foregroundStyle(.secondary)
             Text(cost.map(formatUSD) ?? "—")
-                .font(.system(size: 15, weight: .bold, design: .monospaced))
+                .font(CodexTypography.tokenNumber(size: 15, weight: .bold))
             Text("\(formatTokenCount(tokens)) API tokens")
-                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                .font(CodexTypography.tokenNumber(size: 10, weight: .semibold))
                 .foregroundStyle(.secondary)
         }
     }
@@ -833,30 +862,30 @@ struct CodexUsageMonitorPanel: View {
         VStack(alignment: .leading, spacing: 2) {
             Text(chartDayTooltipTitle(day.dayKey))
                 .font(.system(size: 8.5, weight: .semibold))
-            Text("\(day.totalTokens.formatted()) API tokens")
-                .font(.system(size: 8, weight: .medium, design: .monospaced))
+            Text("\(formatTokenCount(day.totalTokens)) API tokens")
+                .font(CodexTypography.tokenNumber(size: 8, weight: .medium))
             Text(CodexLocalization.text(
                 "输入 \(formatTokenCount(day.inputTokens)) · 输出 \(formatTokenCount(day.outputTokens))",
                 "Input \(formatTokenCount(day.inputTokens)) · Output \(formatTokenCount(day.outputTokens))"
             ))
-                .font(.system(size: 7.5, weight: .medium, design: .monospaced))
+                .font(CodexTypography.tokenNumber(size: 7.5, weight: .medium))
                 .foregroundStyle(.secondary)
             if day.cachedInputTokens > 0 || day.cacheWriteInputTokens > 0 {
                 Text(CodexLocalization.text(
                     "Cache 读 \(formatTokenCount(day.cachedInputTokens)) · 写 \(formatTokenCount(day.cacheWriteInputTokens))",
                     "Cache read \(formatTokenCount(day.cachedInputTokens)) · write \(formatTokenCount(day.cacheWriteInputTokens))"
                 ))
-                    .font(.system(size: 7.5, weight: .medium, design: .monospaced))
+                    .font(CodexTypography.tokenNumber(size: 7.5, weight: .medium))
                     .foregroundStyle(.secondary)
             }
             if day.priorityTokens > 0 {
                 Text("Fast/Priority \(formatTokenCount(day.priorityTokens))")
-                    .font(.system(size: 7.5, weight: .semibold, design: .monospaced))
+                    .font(CodexTypography.tokenNumber(size: 7.5, weight: .semibold))
                     .foregroundStyle(theme.secondary)
             }
             Text(day.estimatedCostUSD.map(formatUSD)
                 ?? CodexLocalization.text("费用未知", "Cost unavailable"))
-                .font(.system(size: 8, weight: .semibold, design: .monospaced))
+                .font(CodexTypography.tokenNumber(size: 8, weight: .semibold))
                 .foregroundStyle(theme.primary)
         }
         .padding(.horizontal, 7)
@@ -1160,6 +1189,19 @@ struct CodexUsageMonitorPanel: View {
 
     private func projectsOverview(_ snapshot: CodexRecentUsageSnapshot) -> some View {
         VStack(alignment: .leading, spacing: 12) {
+            ForEach(panelCardConfiguration.visibleCards(in: .projects)) { card in
+                projectsOverviewCard(card, snapshot: snapshot)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func projectsOverviewCard(
+        _ card: CodexPanelCardID,
+        snapshot: CodexRecentUsageSnapshot
+    ) -> some View {
+        switch card {
+        case .projectsSummary:
             HStack(spacing: 8) {
                 workMetric(
                     CodexLocalization.text("项目", "Projects"),
@@ -1177,7 +1219,7 @@ struct CodexUsageMonitorPanel: View {
                     symbol: "sum"
                 )
             }
-
+        case .projectsList:
             VStack(alignment: .leading, spacing: 7) {
                 codexSectionLabel(CodexLocalization.text("按项目统计 · 最近 30 天", "BY PROJECT · LAST 30 DAYS"))
                 if snapshot.topProjects.isEmpty {
@@ -1204,8 +1246,10 @@ struct CodexUsageMonitorPanel: View {
                     .background(CodexGlassCard(cornerRadius: 10))
                 }
             }
-
+        case .projectsScope:
             dataScopeFootnote(snapshot)
+        default:
+            EmptyView()
         }
     }
 
@@ -1358,106 +1402,122 @@ struct CodexUsageMonitorPanel: View {
     private var conversationsPage: some View {
         VStack(alignment: .leading, spacing: 14) {
             if let snapshot = monitor.recentConversations {
-                if let usageSnapshot = monitor.recentUsage,
-                   let focusedConversation = focusedConversation(
-                       in: snapshot,
-                       usage: usageSnapshot
-                   )
-                {
-                    Group {
-                        if let context = contextHealth(
-                            for: focusedConversation.id,
-                            in: usageSnapshot
-                        ) {
-                            contextHealthCard(context)
-                        } else {
-                            conversationMetricUnavailableCard(
-                                title: CodexLocalization.text("上下文健康", "Context health"),
-                                symbol: "brain.head.profile",
-                                message: CodexLocalization.text(
-                                    "该会话暂无上下文采样",
-                                    "No context sample for this conversation"
-                                )
-                            )
-                        }
-
-                        if let session = sessionUsage(
-                            for: focusedConversation.id,
-                            in: usageSnapshot
-                        ) {
-                            taskEfficiencyCard(session)
-                        } else {
-                            conversationMetricUnavailableCard(
-                                title: CodexLocalization.text("任务效率", "Task efficiency"),
-                                symbol: "stopwatch.fill",
-                                message: CodexLocalization.text(
-                                    "该会话暂无任务效率数据",
-                                    "No task efficiency data for this conversation"
-                                )
-                            )
-                        }
-                    }
-                    .id(focusedConversation.id)
-                    .transition(.opacity.combined(with: .scale(scale: 0.992)))
+                ForEach(panelCardConfiguration.visibleCards(in: .conversations)) { card in
+                    conversationCard(card, snapshot: snapshot)
                 }
-
-                HStack(spacing: 10) {
-                    metricTile(
-                        title: CodexLocalization.text("最近记录", "Recent"),
-                        value: "\(snapshot.conversations.count)",
-                        symbol: "bubble.left.and.text.bubble.right.fill",
-                        color: theme.primary
-                    )
-                    metricTile(
-                        title: CodexLocalization.text("项目", "Projects"),
-                        value: "\(snapshot.projectCount)",
-                        symbol: "folder.fill",
-                        color: theme.secondary
-                    )
-                    metricTile(
-                        title: CodexLocalization.text("活跃", "Active"),
-                        value: "\(snapshot.activeCount)",
-                        symbol: "bolt.fill",
-                        color: CodexPalette.green(for: appearance)
-                    )
-                }
-
-                VStack(alignment: .leading, spacing: 7) {
-                    codexSectionLabel(CodexLocalization.text("最近 CODEX 对话 / 任务", "RECENT CODEX CONVERSATIONS / TASKS"))
-
-                    if snapshot.conversations.isEmpty {
-                        conversationEmptyCard
-                    } else {
-                        VStack(spacing: 0) {
-                            ForEach(Array(snapshot.conversations.enumerated()), id: \.element.id) { index, conversation in
-                                let sessionUsage = monitor.recentUsage?.recentSessions.first {
-                                    $0.id == conversation.id
-                                }
-                                CodexConversationRow(
-                                    conversation: conversation,
-                                    usage: sessionUsage,
-                                    theme: theme,
-                                    activeColor: CodexPalette.green(for: appearance),
-                                    onHoverChange: { hovering in
-                                        updateHoveredConversation(
-                                            conversation.id,
-                                            hovering: hovering
-                                        )
-                                    },
-                                    action: { openConversation(conversation) }
-                                )
-                                if index < snapshot.conversations.count - 1 {
-                                    CodexGlassDivider().padding(.leading, 43)
-                                }
-                            }
-                        }
-                        .background(CodexGlassCard(cornerRadius: 10))
-                    }
-                }
-
-                conversationsFooter(snapshot)
             } else {
                 conversationLoadingCard
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func conversationCard(
+        _ card: CodexPanelCardID,
+        snapshot: CodexConversationSnapshot
+    ) -> some View {
+        switch card {
+        case .conversationMetrics:
+            conversationFocusMetrics(snapshot)
+        case .conversationSummary:
+            HStack(spacing: 10) {
+                metricTile(
+                    title: CodexLocalization.text("最近记录", "Recent"),
+                    value: "\(snapshot.conversations.count)",
+                    symbol: "bubble.left.and.text.bubble.right.fill",
+                    color: theme.primary
+                )
+                metricTile(
+                    title: CodexLocalization.text("项目", "Projects"),
+                    value: "\(snapshot.projectCount)",
+                    symbol: "folder.fill",
+                    color: theme.secondary
+                )
+                metricTile(
+                    title: CodexLocalization.text("活跃", "Active"),
+                    value: "\(snapshot.activeCount)",
+                    symbol: "bolt.fill",
+                    color: CodexPalette.green(for: appearance)
+                )
+            }
+        case .conversationList:
+            conversationList(snapshot)
+        case .conversationFooter:
+            conversationsFooter(snapshot)
+        default:
+            EmptyView()
+        }
+    }
+
+    @ViewBuilder
+    private func conversationFocusMetrics(_ snapshot: CodexConversationSnapshot) -> some View {
+        if let usageSnapshot = monitor.recentUsage,
+           let focusedConversation = focusedConversation(in: snapshot, usage: usageSnapshot)
+        {
+            Group {
+                if let context = contextHealth(for: focusedConversation.id, in: usageSnapshot) {
+                    contextHealthCard(context)
+                } else {
+                    conversationMetricUnavailableCard(
+                        title: CodexLocalization.text("上下文健康", "Context health"),
+                        symbol: "brain.head.profile",
+                        message: CodexLocalization.text(
+                            "该会话暂无上下文采样",
+                            "No context sample for this conversation"
+                        )
+                    )
+                }
+
+                if let session = sessionUsage(for: focusedConversation.id, in: usageSnapshot) {
+                    taskEfficiencyCard(session)
+                } else {
+                    conversationMetricUnavailableCard(
+                        title: CodexLocalization.text("任务效率", "Task efficiency"),
+                        symbol: "stopwatch.fill",
+                        message: CodexLocalization.text(
+                            "该会话暂无任务效率数据",
+                            "No task efficiency data for this conversation"
+                        )
+                    )
+                }
+            }
+            .id(focusedConversation.id)
+            .transition(.opacity.combined(with: .scale(scale: 0.992)))
+        }
+    }
+
+    private func conversationList(_ snapshot: CodexConversationSnapshot) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            codexSectionLabel(CodexLocalization.text(
+                "最近 CODEX 对话 / 任务",
+                "RECENT CODEX CONVERSATIONS / TASKS"
+            ))
+
+            if snapshot.conversations.isEmpty {
+                conversationEmptyCard
+            } else {
+                VStack(spacing: 0) {
+                    ForEach(Array(snapshot.conversations.enumerated()), id: \.element.id) { index, conversation in
+                        let sessionUsage = monitor.recentUsage?.recentSessions.first {
+                            $0.id == conversation.id
+                        }
+                        CodexConversationRow(
+                            conversation: conversation,
+                            usage: sessionUsage,
+                            theme: theme,
+                            activeColor: CodexPalette.green(for: appearance),
+                            tokenFormat: tokenFormat,
+                            onHoverChange: { hovering in
+                                updateHoveredConversation(conversation.id, hovering: hovering)
+                            },
+                            action: { openConversation(conversation) }
+                        )
+                        if index < snapshot.conversations.count - 1 {
+                            CodexGlassDivider().padding(.leading, 43)
+                        }
+                    }
+                }
+                .background(CodexGlassCard(cornerRadius: 10))
             }
         }
     }
@@ -1502,10 +1562,23 @@ struct CodexUsageMonitorPanel: View {
         _ conversationID: String,
         hovering: Bool
     ) {
-        withAnimation(.spring(response: 0.26, dampingFraction: 0.86)) {
-            if hovering {
+        conversationHoverSequence += 1
+        let sequence = conversationHoverSequence
+
+        if hovering {
+            withAnimation(.easeInOut(duration: 0.16)) {
                 hoveredConversationID = conversationID
-            } else if hoveredConversationID == conversationID {
+            }
+            return
+        }
+
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(90))
+            guard sequence == conversationHoverSequence,
+                  hoveredConversationID == conversationID
+            else { return }
+
+            withAnimation(.easeInOut(duration: 0.16)) {
                 hoveredConversationID = nil
             }
         }
@@ -1515,6 +1588,7 @@ struct CodexUsageMonitorPanel: View {
     private var hoveredConversationMetricsOverlay: some View {
         if page == .work,
            workSection == .conversations,
+           panelCardConfiguration.isVisible(.conversationMetrics, in: .conversations),
            let conversationID = hoveredConversationID,
            let conversations = monitor.recentConversations,
            let conversation = conversations.conversations.first(where: {
@@ -1527,14 +1601,11 @@ struct CodexUsageMonitorPanel: View {
                 context: contextHealth(for: conversationID, in: usage),
                 session: sessionUsage(for: conversationID, in: usage)
             )
-            .id(conversation.id)
             .transition(.asymmetric(
-                insertion: .offset(y: -10)
-                    .combined(with: .opacity)
-                    .combined(with: .scale(scale: 0.985, anchor: .top)),
-                removal: .offset(y: -5)
-                    .combined(with: .opacity)
-                    .combined(with: .scale(scale: 0.99, anchor: .top))
+                insertion: .opacity
+                    .combined(with: .scale(scale: 0.99, anchor: .top)),
+                removal: .opacity
+                    .combined(with: .scale(scale: 0.995, anchor: .top))
             ))
         }
     }
@@ -1544,88 +1615,93 @@ struct CodexUsageMonitorPanel: View {
         context: CodexContextHealthSnapshot?,
         session: CodexSessionUsageSummary?
     ) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 7) {
-                Image(systemName: "bubble.left.and.text.bubble.right.fill")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(theme.gradient)
+        ZStack(alignment: .topLeading) {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 7) {
+                    Image(systemName: "bubble.left.and.text.bubble.right.fill")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(theme.gradient)
 
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(conversation.title ?? CodexLocalization.text("未命名对话", "Untitled conversation"))
-                        .font(.system(size: 9, weight: .semibold))
-                        .lineLimit(1)
-                    Text(conversation.projectName)
-                        .font(.system(size: 7.5, weight: .medium))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(conversation.title ?? CodexLocalization.text("未命名对话", "Untitled conversation"))
+                            .font(.system(size: 9, weight: .semibold))
+                            .lineLimit(1)
+                        Text(conversation.projectName)
+                            .font(.system(size: 7.5, weight: .medium))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+
+                    Spacer(minLength: 6)
+
+                    Text(CodexLocalization.text("悬停数据", "Hover metrics"))
+                        .font(.system(size: 7.5, weight: .semibold))
+                        .foregroundStyle(theme.primary)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .background(theme.primary.opacity(0.11), in: Capsule())
                 }
 
-                Spacer(minLength: 6)
+                HStack(spacing: 6) {
+                    Label(CodexLocalization.text("上下文", "Context"), systemImage: "brain.head.profile")
+                        .font(.system(size: 7.5, weight: .semibold))
+                        .foregroundStyle(.secondary)
 
-                Text(CodexLocalization.text("悬停数据", "Hover metrics"))
-                    .font(.system(size: 7.5, weight: .semibold))
-                    .foregroundStyle(theme.primary)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 3)
-                    .background(theme.primary.opacity(0.11), in: Capsule())
-            }
+                    Text(context.map { "\(Int($0.usedPercent.rounded()))%" } ?? "—")
+                        .font(.system(size: 8.5, weight: .bold, design: .monospaced))
+                        .foregroundStyle(
+                            (context?.usedPercent ?? 0) >= 85
+                                ? CodexPalette.yellow(for: appearance)
+                                : theme.primary
+                        )
 
-            HStack(spacing: 6) {
-                Label(CodexLocalization.text("上下文", "Context"), systemImage: "brain.head.profile")
-                    .font(.system(size: 7.5, weight: .semibold))
-                    .foregroundStyle(.secondary)
+                    Text(context.map {
+                        "\(formatTokenCount($0.usedContextTokens))/\(formatTokenCount($0.contextWindowTokens))"
+                    } ?? "—")
+                        .font(.system(size: 7.5, weight: .semibold, design: .monospaced))
 
-                Text(context.map { "\(Int($0.usedPercent.rounded()))%" } ?? "—")
-                    .font(.system(size: 8.5, weight: .bold, design: .monospaced))
-                    .foregroundStyle(
-                        (context?.usedPercent ?? 0) >= 85
-                            ? CodexPalette.yellow(for: appearance)
-                            : theme.primary
+                    Spacer(minLength: 4)
+
+                    Text(context.map {
+                        CodexLocalization.text(
+                            "Reasoning \(formatTokenCount($0.reasoningOutputTokens)) · 压缩 \($0.compactionCount)",
+                            "Reasoning \(formatTokenCount($0.reasoningOutputTokens)) · \($0.compactionCount) compactions"
+                        )
+                    } ?? CodexLocalization.text("暂无上下文采样", "No context sample"))
+                        .font(.system(size: 7.2, weight: .medium, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
+                }
+                .padding(.horizontal, 7)
+                .padding(.vertical, 5)
+                .background(CodexGlassCard(cornerRadius: 6))
+
+                HStack(spacing: 5) {
+                    hoverEfficiencyMetric(
+                        CodexLocalization.text("轮次", "Turns"),
+                        session.map { "\($0.turnCount)" } ?? "—"
                     )
-
-                Text(context.map {
-                    "\(formatTokenCount($0.usedContextTokens))/\(formatTokenCount($0.contextWindowTokens))"
-                } ?? "—")
-                    .font(.system(size: 7.5, weight: .semibold, design: .monospaced))
-
-                Spacer(minLength: 4)
-
-                Text(context.map {
-                    CodexLocalization.text(
-                        "Reasoning \(formatTokenCount($0.reasoningOutputTokens)) · 压缩 \($0.compactionCount)",
-                        "Reasoning \(formatTokenCount($0.reasoningOutputTokens)) · \($0.compactionCount) compactions"
+                    hoverEfficiencyMetric(
+                        "TTFT",
+                        session?.averageTimeToFirstTokenMilliseconds.map {
+                            String(format: "%.0fms", $0)
+                        } ?? "—"
                     )
-                } ?? CodexLocalization.text("暂无上下文采样", "No context sample"))
-                    .font(.system(size: 7.2, weight: .medium, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.75)
+                    hoverEfficiencyMetric(
+                        CodexLocalization.text("平均", "Avg"),
+                        session?.averageTurnDurationSeconds.map(formatDuration) ?? "—"
+                    )
+                    hoverEfficiencyMetric(
+                        CodexLocalization.text("中止", "Aborted"),
+                        session.map { "\($0.abortedTurnCount)" } ?? "—"
+                    )
+                }
             }
-            .padding(.horizontal, 7)
-            .padding(.vertical, 5)
-            .background(CodexGlassCard(cornerRadius: 6))
-
-            HStack(spacing: 5) {
-                hoverEfficiencyMetric(
-                    CodexLocalization.text("轮次", "Turns"),
-                    session.map { "\($0.turnCount)" } ?? "—"
-                )
-                hoverEfficiencyMetric(
-                    "TTFT",
-                    session?.averageTimeToFirstTokenMilliseconds.map {
-                        String(format: "%.0fms", $0)
-                    } ?? "—"
-                )
-                hoverEfficiencyMetric(
-                    CodexLocalization.text("平均", "Avg"),
-                    session?.averageTurnDurationSeconds.map(formatDuration) ?? "—"
-                )
-                hoverEfficiencyMetric(
-                    CodexLocalization.text("中止", "Aborted"),
-                    session.map { "\($0.abortedTurnCount)" } ?? "—"
-                )
-            }
+            .id(conversation.id)
+            .transition(.opacity.combined(with: .scale(scale: 0.998, anchor: .top)))
         }
+        .animation(.easeInOut(duration: 0.20), value: conversation.id)
         .padding(9)
         .frame(width: panelContentWidth, alignment: .leading)
         .background(CodexFloatingGlassCard(cornerRadius: 11))
@@ -1842,17 +1918,6 @@ struct CodexUsageMonitorPanel: View {
                 .font(.system(size: 9, weight: .medium))
                 .foregroundStyle(.secondary)
             Spacer()
-            Button { openCodexApp() } label: {
-                Image(systemName: "terminal.fill")
-            }
-            .buttonStyle(.plain)
-            .modifier(CodexFooterActionHover(
-                testingID: "open-codex",
-                help: CodexLocalization.text("打开 Codex", "Open Codex"),
-                accent: theme.primary,
-                restingColor: .secondary,
-                tipAlignment: .top
-            ))
             Button { monitor.refreshConversations() } label: {
                 Image(systemName: "arrow.clockwise")
             }
@@ -1871,19 +1936,83 @@ struct CodexUsageMonitorPanel: View {
         .font(.system(size: 11, weight: .semibold))
     }
 
+    private var quickLaunchBar: some View {
+        HStack(spacing: 7) {
+            if showGPTClassicLaunch {
+                CodexQuickLaunchButton(
+                    title: "GPT Classic",
+                    symbol: "bubble.left.and.bubble.right.fill",
+                    help: CodexLocalization.text(
+                        "打开本机 ChatGPT Classic",
+                        "Open the local ChatGPT Classic app"
+                    ),
+                    accent: theme.secondary,
+                    width: 97,
+                    action: openGPTClassic
+                )
+            }
+            if showCodexLaunch {
+                CodexQuickLaunchButton(
+                    title: "Codex",
+                    symbol: "macwindow",
+                    help: CodexLocalization.text("打开 Codex Desktop", "Open Codex Desktop"),
+                    accent: theme.primary,
+                    width: 97,
+                    action: openCodexApp
+                )
+            }
+            if showCLILaunch {
+                CodexQuickLaunchButton(
+                    title: "Codex CLI",
+                    symbol: "terminal.fill",
+                    help: CodexLocalization.text(
+                        "在所选终端中输入 codex（不自动运行）",
+                        "Type codex in the selected terminal without running it"
+                    ),
+                    accent: theme.primary,
+                    width: 97,
+                    action: openCodexCLI
+                )
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .frame(width: panelWidth, height: 39)
+        .background(Color.primary.opacity(appearance == .dark ? 0.025 : 0.018))
+    }
+
     @ViewBuilder
     private var statusPage: some View {
         VStack(alignment: .leading, spacing: 14) {
             if let status = monitor.serviceStatus {
-                overallStatusCard(status)
-                if let chatGPT = status.chatGPT { statusGroupCard(chatGPT, symbol: "bubble.left.and.bubble.right.fill") }
-                if let codex = status.codex { statusGroupCard(codex, symbol: "terminal.fill") }
-                statusFooter
+                ForEach(panelCardConfiguration.visibleCards(in: .status)) { card in
+                    statusCard(card, status: status)
+                }
             } else if let error = monitor.statusError {
                 errorCard(error)
             } else {
                 loadingCard
             }
+        }
+    }
+
+    @ViewBuilder
+    private func statusCard(_ card: CodexPanelCardID, status: OpenAIStatusSnapshot) -> some View {
+        switch card {
+        case .statusOverall:
+            overallStatusCard(status)
+        case .statusChatGPT:
+            if let chatGPT = status.chatGPT {
+                statusGroupCard(chatGPT, symbol: "bubble.left.and.bubble.right.fill")
+            }
+        case .statusCodex:
+            if let codex = status.codex {
+                statusGroupCard(codex, symbol: "terminal.fill")
+            }
+        case .statusFooter:
+            statusFooter
+        default:
+            EmptyView()
         }
     }
 
@@ -2008,7 +2137,7 @@ struct CodexUsageMonitorPanel: View {
                     monitor.writeSetting(value.title, key: "displayMetric")
                 }
                 CodexGlassDivider()
-                settingPicker(CodexLocalization.text("单槽圆环", "Single-Slot Ring"), selection: $ringStyle) {
+                settingPicker(CodexLocalization.text("圆环样式", "Ring Style"), selection: $ringStyle) {
                     ForEach(CodexRingStyle.allCases) { Text($0.title).tag($0) }
                 }
                 .onChange(of: ringStyle) { _, value in
@@ -2038,22 +2167,78 @@ struct CodexUsageMonitorPanel: View {
             }
 
             settingsSection(CodexLocalization.text("PANEL 显示", "PANEL DISPLAY")) {
-                HStack {
-                    Text(CodexLocalization.text(
-                        "显示额外模型额度",
-                        "Show extra model quotas"
-                    ))
-                        .font(.system(size: 11, weight: .medium))
-                    Spacer()
-                    Toggle("", isOn: $showExtraModelQuotas)
-                        .labelsHidden()
-                        .toggleStyle(CodexAccentSwitchStyle(accent: theme.primary))
+                settingPicker(
+                    CodexLocalization.text("Token 格式", "Token format"),
+                    selection: $tokenFormat
+                ) {
+                    ForEach(CodexTokenFormat.allCases) { Text($0.title).tag($0) }
                 }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 8)
-                .onChange(of: showExtraModelQuotas) { _, value in
-                    monitor.writeSetting(value, key: "showExtraModelQuotas")
+                .onChange(of: tokenFormat) { _, value in
+                    monitor.writeSetting(value.title, key: "tokenFormat")
                 }
+            }
+
+            panelContentSettingsSection
+
+            settingsSection(CodexLocalization.text("快捷启动", "QUICK LAUNCH")) {
+                settingToggle(
+                    CodexLocalization.text("显示底部快捷栏", "Show bottom quick launch bar"),
+                    isOn: $showQuickLaunchBar
+                )
+                .onChange(of: showQuickLaunchBar) { _, value in
+                    monitor.writeSetting(value, key: "showQuickLaunchBar")
+                }
+                CodexGlassDivider()
+                settingToggle(
+                    "Codex Desktop",
+                    isOn: $showCodexLaunch,
+                    enabled: showQuickLaunchBar
+                )
+                .onChange(of: showCodexLaunch) { _, value in
+                    monitor.writeSetting(value, key: "showCodexLaunch")
+                }
+                CodexGlassDivider()
+                settingToggle(
+                    "ChatGPT Classic",
+                    isOn: $showGPTClassicLaunch,
+                    enabled: showQuickLaunchBar
+                )
+                .onChange(of: showGPTClassicLaunch) { _, value in
+                    monitor.writeSetting(value, key: "showGPTClassicLaunch")
+                }
+                CodexGlassDivider()
+                settingToggle(
+                    "Codex CLI",
+                    isOn: $showCLILaunch,
+                    enabled: showQuickLaunchBar
+                )
+                .onChange(of: showCLILaunch) { _, value in
+                    monitor.writeSetting(value, key: "showCLILaunch")
+                }
+                CodexGlassDivider()
+                settingPicker(
+                    CodexLocalization.text("CLI 终端", "CLI terminal"),
+                    selection: $preferredTerminal
+                ) {
+                    ForEach(CodexTerminalApplication.allCases) { terminal in
+                        Text(terminal.title).tag(terminal)
+                    }
+                }
+                .opacity(showQuickLaunchBar && showCLILaunch ? 1 : 0.48)
+                .disabled(!showQuickLaunchBar || !showCLILaunch)
+                .onChange(of: preferredTerminal) { _, value in
+                    monitor.writeSetting(value.title, key: "preferredTerminal")
+                }
+                Text(CodexLocalization.text(
+                    "CLI 入口只在所选终端中输入 codex，不会自动执行。",
+                    "The CLI shortcut types codex in the selected terminal without executing it."
+                ))
+                    .font(.system(size: 8.5, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 10)
+                    .padding(.bottom, 8)
+                    .opacity(showQuickLaunchBar && showCLILaunch ? 1 : 0.48)
             }
 
             settingsSection(CodexLocalization.text("连接", "CONNECTION")) {
@@ -2154,6 +2339,337 @@ struct CodexUsageMonitorPanel: View {
                 .foregroundStyle(.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
         }
+    }
+
+    private var panelContentSettingsSection: some View {
+        let presetBinding = Binding<CodexPanelContentPreset>(
+            get: { panelCardConfiguration.preset },
+            set: { applyPanelContentPreset($0) }
+        )
+
+        return settingsSection(CodexLocalization.text("PANEL 内容", "PANEL CONTENT")) {
+            settingPicker(
+                CodexLocalization.text("内容预设", "Content preset"),
+                selection: presetBinding
+            ) {
+                ForEach(CodexPanelContentPreset.allCases) { preset in
+                    Text(preset.title).tag(preset)
+                }
+            }
+
+            Text(panelCardConfiguration.preset.help)
+                .font(.system(size: 8.5, weight: .medium))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 10)
+                .padding(.bottom, 8)
+
+            CodexGlassDivider()
+            panelPageVisibilityGroup
+
+            ForEach(
+                Array(CodexPanelCustomizationSection.allCases.enumerated()),
+                id: \.element.id
+            ) { index, section in
+                CodexGlassDivider()
+                panelCustomizationGroup(section)
+            }
+
+            CodexGlassDivider()
+            Label {
+                Text(CodexLocalization.text(
+                    "设置、加载/错误状态及数据健康始终保留。至少保留一个业务页面，每个页面至少保留一张卡片。",
+                    "Settings, loading/error states, and data health always remain. At least one content page and one card per page are kept."
+                ))
+                    .fixedSize(horizontal: false, vertical: true)
+            } icon: {
+                Image(systemName: "lock.shield.fill")
+                    .foregroundStyle(theme.primary)
+            }
+            .font(.system(size: 8.5, weight: .medium))
+            .foregroundStyle(.secondary)
+            .padding(10)
+        }
+    }
+
+    private var panelPageVisibilityGroup: some View {
+        let visibleCount = panelCardConfiguration.visiblePages.count
+
+        return VStack(alignment: .leading, spacing: 0) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.18)) {
+                    let willExpand = !isPanelPageVisibilityExpanded
+                    isPanelPageVisibilityExpanded = willExpand
+                    if willExpand {
+                        expandedPanelCustomizationSection = nil
+                    }
+                }
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "rectangle.stack.fill")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(theme.primary)
+                        .frame(width: 18)
+                    Text(CodexLocalization.text("页面显示", "Page visibility"))
+                        .font(.system(size: 10.5, weight: .semibold))
+                    Spacer(minLength: 6)
+                    Text("\(visibleCount)/\(CodexPanelConfigurablePage.allCases.count)")
+                        .font(CodexTypography.tokenNumber(size: 8.5, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                    Image(systemName: isPanelPageVisibilityExpanded ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 7.5, weight: .bold))
+                        .foregroundStyle(.tertiary)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(CodexLocalization.text("管理顶部导航中的页面", "Manage pages in the top navigation"))
+
+            if isPanelPageVisibilityExpanded {
+                CodexGlassDivider().padding(.leading, 36)
+                ForEach(
+                    Array(CodexPanelConfigurablePage.allCases.enumerated()),
+                    id: \.element.id
+                ) { index, configurablePage in
+                    panelPageVisibilityRow(configurablePage, visibleCount: visibleCount)
+                    if index < CodexPanelConfigurablePage.allCases.count - 1 {
+                        CodexGlassDivider().padding(.leading, 36)
+                    }
+                }
+            }
+        }
+    }
+
+    private func panelPageVisibilityRow(
+        _ configurablePage: CodexPanelConfigurablePage,
+        visibleCount: Int
+    ) -> some View {
+        let isVisible = panelCardConfiguration.isPageVisible(configurablePage)
+        let visibility = Binding<Bool>(
+            get: { panelCardConfiguration.isPageVisible(configurablePage) },
+            set: { setPanelPageVisible($0, page: configurablePage) }
+        )
+
+        return HStack(spacing: 8) {
+            Image(systemName: configurablePage.symbol)
+                .font(.system(size: 9.5, weight: .semibold))
+                .foregroundStyle(isVisible ? theme.primary : Color.secondary)
+                .frame(width: 18)
+
+            Text(configurablePage.title)
+                .font(.system(size: 9.5, weight: .medium))
+                .foregroundStyle(isVisible ? Color.primary : Color.secondary)
+
+            Spacer(minLength: 4)
+
+            Toggle("", isOn: visibility)
+                .labelsHidden()
+                .controlSize(.mini)
+                .toggleStyle(CodexAccentSwitchStyle(accent: theme.primary))
+                .disabled(isVisible && visibleCount <= 1)
+                .help(isVisible
+                    ? CodexLocalization.text("从顶部导航隐藏此页面", "Hide this page from navigation")
+                    : CodexLocalization.text("在顶部导航显示此页面", "Show this page in navigation"))
+        }
+        .padding(.leading, 18)
+        .padding(.trailing, 10)
+        .padding(.vertical, 6)
+        .background(
+            theme.primary.opacity(isVisible ? 0.025 : 0),
+            in: RoundedRectangle(cornerRadius: 7)
+        )
+    }
+
+    @ViewBuilder
+    private func panelCustomizationGroup(
+        _ section: CodexPanelCustomizationSection
+    ) -> some View {
+        let preferences = panelCardConfiguration.preferences(for: section)
+        let visibleCount = preferences.filter(\.isVisible).count
+        let isExpanded = expandedPanelCustomizationSection == section
+
+        Button {
+            withAnimation(.easeInOut(duration: 0.18)) {
+                let willExpand = !isExpanded
+                expandedPanelCustomizationSection = willExpand ? section : nil
+                if willExpand {
+                    isPanelPageVisibilityExpanded = false
+                }
+            }
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: section.symbol)
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(theme.primary)
+                    .frame(width: 18)
+                Text(section.title)
+                    .font(.system(size: 10.5, weight: .semibold))
+                Spacer(minLength: 6)
+                Text("\(visibleCount)/\(preferences.count)")
+                    .font(.system(size: 8.5, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                    .font(.system(size: 7.5, weight: .bold))
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(CodexLocalization.text("管理该页面的卡片", "Manage cards on this page"))
+
+        if isExpanded {
+            CodexGlassDivider().padding(.leading, 36)
+            ForEach(Array(preferences.enumerated()), id: \.element.id) { index, preference in
+                panelCustomizationCardRow(
+                    preference,
+                    index: index,
+                    count: preferences.count,
+                    visibleCount: visibleCount,
+                    section: section
+                )
+                if index < preferences.count - 1 {
+                    CodexGlassDivider().padding(.leading, 36)
+                }
+            }
+        }
+    }
+
+    private func panelCustomizationCardRow(
+        _ preference: CodexPanelCardPreference,
+        index: Int,
+        count: Int,
+        visibleCount: Int,
+        section: CodexPanelCustomizationSection
+    ) -> some View {
+        let visibility = Binding<Bool>(
+            get: {
+                panelCardConfiguration.isVisible(preference.id, in: section)
+            },
+            set: { value in
+                setPanelCardVisible(value, card: preference.id, section: section)
+            }
+        )
+
+        return HStack(spacing: 8) {
+            Image(systemName: preference.id.symbol)
+                .font(.system(size: 9.5, weight: .semibold))
+                .foregroundStyle(preference.isVisible ? theme.primary : Color.secondary)
+                .frame(width: 18)
+
+            Text(preference.id.title)
+                .font(.system(size: 9.5, weight: .medium))
+                .foregroundStyle(preference.isVisible ? Color.primary : Color.secondary)
+                .lineLimit(1)
+
+            Spacer(minLength: 4)
+
+            HStack(spacing: 3) {
+                panelOrderButton(
+                    symbol: "chevron.up",
+                    help: CodexLocalization.text("向上移动", "Move up"),
+                    disabled: index == 0
+                ) {
+                    movePanelCard(preference.id, section: section, offset: -1)
+                }
+                panelOrderButton(
+                    symbol: "chevron.down",
+                    help: CodexLocalization.text("向下移动", "Move down"),
+                    disabled: index == count - 1
+                ) {
+                    movePanelCard(preference.id, section: section, offset: 1)
+                }
+            }
+
+            Toggle("", isOn: visibility)
+                .labelsHidden()
+                .controlSize(.mini)
+                .toggleStyle(CodexAccentSwitchStyle(accent: theme.primary))
+                .disabled(preference.isVisible && visibleCount <= 1)
+                .help(preference.isVisible
+                    ? CodexLocalization.text("隐藏卡片", "Hide card")
+                    : CodexLocalization.text("显示卡片", "Show card"))
+        }
+        .padding(.leading, 18)
+        .padding(.trailing, 10)
+        .padding(.vertical, 6)
+        .background(
+            theme.primary.opacity(preference.isVisible ? 0.025 : 0),
+            in: RoundedRectangle(cornerRadius: 7)
+        )
+    }
+
+    private func panelOrderButton(
+        symbol: String,
+        help: String,
+        disabled: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 7.5, weight: .bold))
+                .frame(width: 18, height: 18)
+                .background(
+                    Color.primary.opacity(disabled ? 0.025 : 0.055),
+                    in: RoundedRectangle(cornerRadius: 5)
+                )
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(disabled ? Color.secondary.opacity(0.35) : theme.primary)
+        .disabled(disabled)
+        .help(help)
+    }
+
+    private func applyPanelContentPreset(_ preset: CodexPanelContentPreset) {
+        var configuration = panelCardConfiguration
+        configuration.apply(preset)
+        persistPanelCardConfiguration(configuration)
+    }
+
+    private func setPanelCardVisible(
+        _ visible: Bool,
+        card: CodexPanelCardID,
+        section: CodexPanelCustomizationSection
+    ) {
+        var configuration = panelCardConfiguration
+        configuration.setVisible(visible, card: card, in: section)
+        persistPanelCardConfiguration(configuration)
+    }
+
+    private func setPanelPageVisible(
+        _ visible: Bool,
+        page configurablePage: CodexPanelConfigurablePage
+    ) {
+        var configuration = panelCardConfiguration
+        configuration.setPageVisible(visible, page: configurablePage)
+        persistPanelCardConfiguration(configuration)
+    }
+
+    private func movePanelCard(
+        _ card: CodexPanelCardID,
+        section: CodexPanelCustomizationSection,
+        offset: Int
+    ) {
+        var configuration = panelCardConfiguration
+        configuration.move(card: card, in: section, offset: offset)
+        persistPanelCardConfiguration(configuration)
+    }
+
+    private func persistPanelCardConfiguration(
+        _ configuration: CodexPanelCardConfiguration
+    ) {
+        guard let encoded = configuration.encoded() else { return }
+        withAnimation(.easeInOut(duration: 0.18)) {
+            panelCardConfiguration = configuration
+            if page != .settings,
+               !configuration.visiblePages.map(\.panelPage).contains(page) {
+                page = configuration.visiblePages.first?.panelPage ?? .settings
+            }
+        }
+        monitor.writeSetting(encoded, key: CodexPanelCardConfiguration.storageKey)
     }
 
     private var dataHealthSection: some View {
@@ -2329,6 +2845,25 @@ struct CodexUsageMonitorPanel: View {
         .padding(.vertical, 6)
     }
 
+    private func settingToggle(
+        _ label: String,
+        isOn: Binding<Bool>,
+        enabled: Bool = true
+    ) -> some View {
+        HStack {
+            Text(label)
+                .font(.system(size: 11, weight: .medium))
+            Spacer()
+            Toggle("", isOn: isOn)
+                .labelsHidden()
+                .toggleStyle(CodexAccentSwitchStyle(accent: theme.primary))
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .opacity(enabled ? 1 : 0.48)
+        .disabled(!enabled)
+    }
+
     private func settingActionRow(
         _ label: String,
         symbol: String,
@@ -2416,17 +2951,7 @@ struct CodexUsageMonitorPanel: View {
     }
 
     private func formatTokenCount(_ value: Int) -> String {
-        let number = Double(value)
-        switch value {
-        case 1_000_000_000...:
-            return String(format: number >= 10_000_000_000 ? "%.0fB" : "%.1fB", number / 1_000_000_000)
-        case 1_000_000...:
-            return String(format: number >= 100_000_000 ? "%.0fM" : "%.1fM", number / 1_000_000)
-        case 1_000...:
-            return String(format: number >= 100_000 ? "%.0fK" : "%.1fK", number / 1_000)
-        default:
-            return value.formatted()
-        }
+        tokenFormat.format(value)
     }
 
     private func loadSettings() {
@@ -2456,12 +2981,43 @@ struct CodexUsageMonitorPanel: View {
             widgetId: widgetId,
             default: CodexRefreshInterval.fiveMinutes.title
         ))
+        tokenFormat = CodexTokenFormat.resolve(title: WidgetDefaults.string(
+            key: "tokenFormat",
+            widgetId: widgetId,
+            default: CodexTokenFormat.automatic.title
+        ))
         showStatus = WidgetDefaults.bool(key: "showStatus", widgetId: widgetId, default: true)
-        showExtraModelQuotas = WidgetDefaults.bool(
-            key: "showExtraModelQuotas",
+        let loadedPanelCardConfiguration = CodexPanelCardConfiguration.load(widgetId: widgetId)
+        panelCardConfiguration = loadedPanelCardConfiguration
+        if page != .settings,
+           !loadedPanelCardConfiguration.visiblePages.map(\.panelPage).contains(page) {
+            page = loadedPanelCardConfiguration.visiblePages.first?.panelPage ?? .settings
+        }
+        showQuickLaunchBar = WidgetDefaults.bool(
+            key: "showQuickLaunchBar",
             widgetId: widgetId,
             default: true
         )
+        showCodexLaunch = WidgetDefaults.bool(
+            key: "showCodexLaunch",
+            widgetId: widgetId,
+            default: true
+        )
+        showGPTClassicLaunch = WidgetDefaults.bool(
+            key: "showGPTClassicLaunch",
+            widgetId: widgetId,
+            default: true
+        )
+        showCLILaunch = WidgetDefaults.bool(
+            key: "showCLILaunch",
+            widgetId: widgetId,
+            default: true
+        )
+        preferredTerminal = CodexTerminalApplication.resolve(title: WidgetDefaults.string(
+            key: "preferredTerminal",
+            widgetId: widgetId,
+            default: CodexTerminalApplication.automatic.title
+        ))
     }
 
     private var resolvedQuotaSourceLabel: String {
@@ -2478,6 +3034,11 @@ struct CodexUsageMonitorPanel: View {
     }
 
     private func openConversation(_ conversation: CodexRecentConversation) {
+        if conversation.surface == .cli {
+            openCodexCLIConversation(conversation)
+            return
+        }
+
         if let deepLink = conversation.codexDeepLink {
             NSWorkspace.shared.open(deepLink)
         } else {
@@ -2487,23 +3048,8 @@ struct CodexUsageMonitorPanel: View {
 
     private func openCodexApp() {
         let workspace = NSWorkspace.shared
-        let bundleIdentifiers = [
-            "com.openai.codex",
-            "com.openai.chat",
-        ]
-
-        for bundleIdentifier in bundleIdentifiers {
-            if let applicationURL = workspace.urlForApplication(
-                withBundleIdentifier: bundleIdentifier
-            ) {
-                let configuration = NSWorkspace.OpenConfiguration()
-                configuration.activates = true
-                workspace.openApplication(
-                    at: applicationURL,
-                    configuration: configuration
-                )
-                return
-            }
+        if openApplication(bundleIdentifier: "com.openai.codex") {
+            return
         }
 
         if let deepLink = URL(string: "codex://") {
@@ -2511,34 +3057,424 @@ struct CodexUsageMonitorPanel: View {
         }
     }
 
-    private var panelBackground: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 12).fill(.ultraThinMaterial)
-            RoundedRectangle(cornerRadius: 12)
-                .fill(
-                    LinearGradient(
-                        colors: [theme.primary.opacity(0.08), Color.clear, theme.secondary.opacity(0.05)],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
+    private func openGPTClassic() {
+        if let applicationURL = chatGPTClassicApplicationURL() {
+            openApplication(at: applicationURL)
+            return
+        }
+        open("https://chatgpt.com/")
+    }
+
+    /// ChatGPT Classic is the previous ChatGPT desktop app and keeps the
+    /// `com.openai.chat` bundle identifier. Resolve an actual installed app
+    /// before falling back to the website; LaunchServices can retain stale
+    /// placeholder registrations after an app has been removed.
+    private func chatGPTClassicApplicationURL() -> URL? {
+        let workspace = NSWorkspace.shared
+        let fileManager = FileManager.default
+        var candidates = NSRunningApplication.runningApplications(
+            withBundleIdentifier: "com.openai.chat"
+        ).compactMap(\.bundleURL)
+
+        let applicationDirectories = [
+            URL(fileURLWithPath: "/Applications", isDirectory: true),
+            fileManager.homeDirectoryForCurrentUser
+                .appendingPathComponent("Applications", isDirectory: true),
+        ]
+        let preferredNames = ["ChatGPT Classic.app", "ChatGPT.app"]
+        for directory in applicationDirectories {
+            candidates.append(contentsOf: preferredNames.map {
+                directory.appendingPathComponent($0, isDirectory: true)
+            })
+
+            if let installedApps = try? fileManager.contentsOfDirectory(
+                at: directory,
+                includingPropertiesForKeys: nil,
+                options: [.skipsHiddenFiles]
+            ) {
+                candidates.append(contentsOf: installedApps.filter {
+                    $0.pathExtension.caseInsensitiveCompare("app") == .orderedSame
+                        && $0.lastPathComponent.localizedCaseInsensitiveContains("ChatGPT")
+                })
+            }
+        }
+
+        if let registeredURL = workspace.urlForApplication(
+            withBundleIdentifier: "com.openai.chat"
+        ) {
+            candidates.append(registeredURL)
+        }
+
+        var seenPaths = Set<String>()
+        return candidates.first { candidate in
+            let resolved = candidate.resolvingSymlinksInPath().standardizedFileURL
+            guard seenPaths.insert(resolved.path).inserted else { return false }
+            return isInstalledChatGPTClassic(at: resolved)
+        }?.resolvingSymlinksInPath().standardizedFileURL
+    }
+
+    private func isInstalledChatGPTClassic(at applicationURL: URL) -> Bool {
+        let path = applicationURL.path
+        guard applicationURL.isFileURL,
+              applicationURL.pathExtension.caseInsensitiveCompare("app") == .orderedSame,
+              !path.contains("/Caches/Placeholders"),
+              !path.contains("/Daemon Containers/"),
+              FileManager.default.fileExists(atPath: path),
+              Bundle(url: applicationURL)?.bundleIdentifier == "com.openai.chat"
+        else {
+            return false
+        }
+        return true
+    }
+
+    private func openCodexCLI() {
+        let terminal = resolvedTerminalApplication()
+        guard let bundleIdentifier = terminal.bundleIdentifier,
+              let applicationURL = NSWorkspace.shared.urlForApplication(
+                  withBundleIdentifier: bundleIdentifier
+              )
+        else {
+            launchTerminalForCodex(.terminal)
+            return
+        }
+
+        launchTerminalForCodex(terminal, applicationURL: applicationURL)
+    }
+
+    private func openCodexCLIConversation(_ conversation: CodexRecentConversation) {
+        guard UUID(uuidString: conversation.id) != nil else {
+            openCodexCLI()
+            return
+        }
+
+        let terminal = resolvedTerminalApplication()
+        let command = codexResumeCommand(for: conversation)
+        guard let bundleIdentifier = terminal.bundleIdentifier,
+              let applicationURL = NSWorkspace.shared.urlForApplication(
+                  withBundleIdentifier: bundleIdentifier
+              )
+        else {
+            launchTerminalForCodex(
+                .terminal,
+                command: command,
+                execute: true
+            )
+            return
+        }
+
+        launchTerminalForCodex(
+            terminal,
+            applicationURL: applicationURL,
+            command: command,
+            execute: true
+        )
+    }
+
+    private func codexResumeCommand(
+        for conversation: CodexRecentConversation
+    ) -> String {
+        var isDirectory: ObjCBool = false
+        let hasProjectDirectory = FileManager.default.fileExists(
+            atPath: conversation.projectPath,
+            isDirectory: &isDirectory
+        ) && isDirectory.boolValue
+        let workingDirectory = hasProjectDirectory
+            ? " -C \(shellQuote(conversation.projectPath))"
+            : ""
+        return "codex resume\(workingDirectory) \(shellQuote(conversation.id))"
+    }
+
+    private func shellQuote(_ value: String) -> String {
+        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+
+    private func resolvedTerminalApplication() -> CodexTerminalApplication {
+        if preferredTerminal != .automatic,
+           let bundleIdentifier = preferredTerminal.bundleIdentifier,
+           NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleIdentifier) != nil
+        {
+            return preferredTerminal
+        }
+
+        let alternatives: [CodexTerminalApplication] = [.ghostty, .iTerm2, .warp]
+        if let running = alternatives.first(where: { terminal in
+            guard let bundleIdentifier = terminal.bundleIdentifier else { return false }
+            return !NSRunningApplication.runningApplications(
+                withBundleIdentifier: bundleIdentifier
+            ).isEmpty
+        }) {
+            return running
+        }
+        return .terminal
+    }
+
+    private func launchTerminalForCodex(
+        _ terminal: CodexTerminalApplication,
+        applicationURL: URL? = nil,
+        command: String = "codex",
+        execute: Bool = false
+    ) {
+        let resolvedURL = applicationURL ?? terminal.bundleIdentifier.flatMap {
+            NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0)
+        }
+        guard let resolvedURL,
+              let bundleIdentifier = terminal.bundleIdentifier
+        else { return }
+
+        let launcher = Process()
+        launcher.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+        launcher.arguments = ["-n", resolvedURL.path]
+
+        do {
+            try launcher.run()
+        } catch {
+            let configuration = NSWorkspace.OpenConfiguration()
+            configuration.activates = true
+            configuration.createsNewApplicationInstance = true
+            NSWorkspace.shared.openApplication(
+                at: resolvedURL,
+                configuration: configuration
+            )
+        }
+
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(900))
+            guard let application = NSRunningApplication.runningApplications(
+                withBundleIdentifier: bundleIdentifier
+            ).max(by: { $0.processIdentifier < $1.processIdentifier })
+            else { return }
+
+            application.activate(options: [.activateAllWindows])
+            try? await Task.sleep(for: .milliseconds(160))
+            typeTerminalCommand(command, into: application.processIdentifier)
+            guard execute else { return }
+            try? await Task.sleep(for: .milliseconds(60))
+            pressReturn(in: application.processIdentifier)
         }
     }
 
-    private var panelBorder: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 12)
-                .strokeBorder(
-                    LinearGradient(
-                        colors: [Color.white.opacity(0.35), Color.white.opacity(0.05), Color.clear],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    ),
-                    lineWidth: 1
-                )
-            RoundedRectangle(cornerRadius: 12)
-                .strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5)
+    private func typeTerminalCommand(
+        _ command: String,
+        into processIdentifier: pid_t
+    ) {
+        let utf16 = Array(command.utf16)
+        guard let source = CGEventSource(stateID: .hidSystemState),
+              let keyDown = CGEvent(
+                  keyboardEventSource: source,
+                  virtualKey: 0,
+                  keyDown: true
+              ),
+              let keyUp = CGEvent(
+                  keyboardEventSource: source,
+                  virtualKey: 0,
+                  keyDown: false
+              )
+        else { return }
+
+        utf16.withUnsafeBufferPointer { buffer in
+            guard let address = buffer.baseAddress else { return }
+            keyDown.keyboardSetUnicodeString(
+                stringLength: buffer.count,
+                unicodeString: address
+            )
+            keyUp.keyboardSetUnicodeString(
+                stringLength: buffer.count,
+                unicodeString: address
+            )
         }
+        keyDown.postToPid(processIdentifier)
+        keyUp.postToPid(processIdentifier)
+    }
+
+    private func pressReturn(in processIdentifier: pid_t) {
+        guard let source = CGEventSource(stateID: .hidSystemState),
+              let keyDown = CGEvent(
+                  keyboardEventSource: source,
+                  virtualKey: 36,
+                  keyDown: true
+              ),
+              let keyUp = CGEvent(
+                  keyboardEventSource: source,
+                  virtualKey: 36,
+                  keyDown: false
+              )
+        else { return }
+
+        keyDown.postToPid(processIdentifier)
+        keyUp.postToPid(processIdentifier)
+    }
+
+    @discardableResult
+    private func openApplication(bundleIdentifier: String) -> Bool {
+        let workspace = NSWorkspace.shared
+        guard let applicationURL = workspace.urlForApplication(
+            withBundleIdentifier: bundleIdentifier
+        ) else {
+            return false
+        }
+
+        openApplication(at: applicationURL)
+        return true
+    }
+
+    private func openApplication(at applicationURL: URL) {
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = true
+        NSWorkspace.shared.openApplication(
+            at: applicationURL,
+            configuration: configuration
+        )
+    }
+
+    private var panelBackground: some View {
+        ZStack {
+            Rectangle()
+                .fill(.ultraThinMaterial)
+            LinearGradient(
+                colors: [
+                    theme.primary.opacity(appearance == .dark ? 0.08 : 0.05),
+                    .clear,
+                    theme.secondary.opacity(appearance == .dark ? 0.06 : 0.04),
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        }
+    }
+}
+
+private struct CodexQuickLaunchButton: View {
+    let title: String
+    let symbol: String
+    let help: String
+    let accent: Color
+    let width: CGFloat
+    let action: () -> Void
+
+    @State private var isHovered = false
+
+    var body: some View {
+        ZStack {
+            HStack(spacing: 6) {
+                Image(systemName: symbol)
+                    .font(.system(size: 9, weight: .semibold))
+                    .symbolRenderingMode(.monochrome)
+                    .frame(width: 13, height: 13, alignment: .center)
+
+                Text(title)
+                    .font(.system(size: 9, weight: .semibold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.82)
+            }
+            .padding(.horizontal, 8)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .allowsHitTesting(false)
+
+            CodexImmediateActionButton(
+                action: action,
+                hoverChanged: { hovering in
+                    withAnimation(.easeInOut(duration: 0.16)) {
+                        isHovered = hovering
+                    }
+                },
+                help: help
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .frame(width: width, height: 27)
+        .foregroundStyle(isHovered ? accent : Color.secondary)
+        .background(
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .fill(accent.opacity(isHovered ? 0.14 : 0.055))
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .strokeBorder(accent.opacity(isHovered ? 0.25 : 0.08), lineWidth: 0.5)
+        }
+    }
+}
+
+private struct CodexImmediateActionButton: NSViewRepresentable {
+    let action: () -> Void
+    let hoverChanged: (Bool) -> Void
+    let help: String
+
+    func makeNSView(context: Context) -> CodexFirstMouseButton {
+        let button = CodexFirstMouseButton()
+        configure(button)
+        return button
+    }
+
+    func updateNSView(_ button: CodexFirstMouseButton, context: Context) {
+        configure(button)
+    }
+
+    private func configure(_ button: CodexFirstMouseButton) {
+        button.activationHandler = action
+        button.hoverHandler = hoverChanged
+        button.toolTip = help
+        button.setAccessibilityLabel(help)
+    }
+}
+
+private final class CodexFirstMouseButton: NSButton {
+    var activationHandler: (() -> Void)?
+    var hoverHandler: ((Bool) -> Void)?
+
+    private var hoverTrackingArea: NSTrackingArea?
+    private var isPointerInside = false
+    private var lastActivation = Date.distantPast
+
+    init() {
+        super.init(frame: .zero)
+        title = ""
+        isBordered = false
+        focusRingType = .none
+        setButtonType(.momentaryChange)
+        setAccessibilityRole(.button)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        true
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        guard isEnabled else { return }
+        let now = Date()
+        guard now.timeIntervalSince(lastActivation) >= 0.25 else { return }
+        lastActivation = now
+        activationHandler?()
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        guard hoverTrackingArea == nil else { return }
+
+        let area = NSTrackingArea(
+            rect: .zero,
+            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area)
+        hoverTrackingArea = area
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        guard !isPointerInside else { return }
+        isPointerInside = true
+        hoverHandler?(true)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        guard isPointerInside else { return }
+        isPointerInside = false
+        hoverHandler?(false)
     }
 }
 
@@ -2548,6 +3484,17 @@ private enum CodexPanelPage: Hashable {
     case work
     case status
     case settings
+}
+
+private extension CodexPanelConfigurablePage {
+    var panelPage: CodexPanelPage {
+        switch self {
+        case .overview: return .overview
+        case .insights: return .insights
+        case .work: return .work
+        case .status: return .status
+        }
+    }
 }
 
 private enum CodexInsightsSection: String, CaseIterable, Identifiable {
@@ -2601,6 +3548,7 @@ private struct CodexConversationRow: View {
     let usage: CodexSessionUsageSummary?
     let theme: CodexThemeColors
     let activeColor: Color
+    let tokenFormat: CodexTokenFormat
     let onHoverChange: (Bool) -> Void
     let action: () -> Void
 
@@ -2626,6 +3574,48 @@ private struct CodexConversationRow: View {
         conversation.isActive ? activeColor : theme.secondary
     }
 
+    private var sourceSymbol: String? {
+        switch conversation.surface {
+        case .cli: return "terminal.fill"
+        case .desktop: return "macwindow"
+        case .unknown: return nil
+        }
+    }
+
+    private var trailingSymbol: String {
+        conversation.surface == .cli ? "terminal.fill" : "arrow.up.forward"
+    }
+
+    private var interactionHelp: String {
+        switch conversation.surface {
+        case .cli:
+            return CodexLocalization.text(
+                "悬停查看此会话的上下文与任务效率；点击在所选终端中恢复此 Codex CLI 会话",
+                "Hover to inspect this conversation's context and efficiency; click to resume it in the selected terminal"
+            )
+        case .desktop:
+            return CodexLocalization.text(
+                "悬停查看此会话的上下文与任务效率；点击在 Codex Desktop 中打开",
+                "Hover to inspect this conversation's context and efficiency; click to open it in Codex Desktop"
+            )
+        case .unknown:
+            return CodexLocalization.text(
+                "悬停查看此会话的上下文与任务效率；点击在 Codex 中打开",
+                "Hover to inspect this conversation's context and efficiency; click to open it in Codex"
+            )
+        }
+    }
+
+    private var accessibilityHint: String {
+        if conversation.surface == .cli {
+            return CodexLocalization.text(
+                "在所选终端中恢复此 Codex CLI 会话",
+                "Resume this Codex CLI conversation in the selected terminal"
+            )
+        }
+        return CodexLocalization.text("在 Codex 中打开此任务", "Open this task in Codex")
+    }
+
     var body: some View {
         Button(action: action) {
             HStack(spacing: 9) {
@@ -2644,6 +3634,11 @@ private struct CodexConversationRow: View {
                         .lineLimit(1)
                         .truncationMode(.tail)
                     HStack(spacing: 5) {
+                        if let sourceSymbol {
+                            Image(systemName: sourceSymbol)
+                                .font(.system(size: 7, weight: .semibold))
+                                .accessibilityHidden(true)
+                        }
                         Text(conversation.projectName)
                             .lineLimit(1)
                             .truncationMode(.middle)
@@ -2678,7 +3673,7 @@ private struct CodexConversationRow: View {
                     .padding(.vertical, 3)
                     .background(stateColor.opacity(0.10), in: Capsule())
 
-                Image(systemName: "arrow.up.forward")
+                Image(systemName: trailingSymbol)
                     .font(.system(size: 8, weight: .bold))
                     .foregroundStyle(isHovered ? theme.primary : Color.secondary.opacity(0.55))
             }
@@ -2691,33 +3686,22 @@ private struct CodexConversationRow: View {
             )
         }
         .buttonStyle(.plain)
-        .scaleEffect(isHovered ? 1.008 : 1)
+        .scaleEffect(isHovered ? 1.004 : 1)
         .onHover { hovering in
-            withAnimation(.easeOut(duration: 0.14)) {
+            withAnimation(.easeInOut(duration: 0.18)) {
                 isHovered = hovering
             }
             onHoverChange(hovering)
         }
-        .help(CodexLocalization.text(
-            "悬停查看此会话的上下文与任务效率；点击在 Codex 中打开",
-            "Hover to inspect this conversation's context and efficiency; click to open in Codex"
-        ))
+        .help(interactionHelp)
         .accessibilityLabel(
             conversation.title ?? CodexLocalization.text("未命名任务", "Untitled task")
         )
-        .accessibilityHint(CodexLocalization.text("在 Codex 中打开此任务", "Open this task in Codex"))
+        .accessibilityHint(accessibilityHint)
     }
 
     private func compactTokenCount(_ value: Int) -> String {
-        let number = Double(value)
-        switch value {
-        case 1_000_000...:
-            return String(format: "%.1fM", number / 1_000_000)
-        case 1_000...:
-            return String(format: "%.1fK", number / 1_000)
-        default:
-            return value.formatted()
-        }
+        tokenFormat.format(value)
     }
 }
 

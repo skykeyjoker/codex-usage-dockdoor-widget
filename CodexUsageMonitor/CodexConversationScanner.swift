@@ -7,6 +7,12 @@ struct CodexConversationSnapshot: Sendable {
     let updatedAt: Date
 }
 
+enum CodexConversationSurface: Sendable, Equatable {
+    case desktop
+    case cli
+    case unknown
+}
+
 struct CodexRecentConversation: Identifiable, Sendable {
     let id: String
     let title: String?
@@ -16,6 +22,7 @@ struct CodexRecentConversation: Identifiable, Sendable {
     let modifiedAt: Date
     let isActive: Bool
     let isArchived: Bool
+    let surface: CodexConversationSurface
 
     var relativeActivity: String {
         let formatter = RelativeDateTimeFormatter()
@@ -69,7 +76,8 @@ struct CodexConversationScanner: Sendable {
                 createdAt: metadata.createdAt,
                 modifiedAt: file.modifiedAt,
                 isActive: now.timeIntervalSince(file.modifiedAt) < activeWindow,
-                isArchived: file.isArchived
+                isArchived: file.isArchived,
+                surface: metadata.surface
             ))
 
             if conversations.count >= resolvedLimit {
@@ -140,6 +148,7 @@ struct CodexConversationScanner: Sendable {
         var cwd: String?
         var createdAt: Date?
         var isSubagent = false
+        var surface: CodexConversationSurface = .unknown
         var title: String?
 
         for line in prefix.split(separator: "\n").prefix(120) {
@@ -158,6 +167,10 @@ struct CodexConversationScanner: Sendable {
                         ?? object["timestamp"] as? String
                 )
                 isSubagent = sourceIsSubagent(payload["source"])
+                surface = conversationSurface(
+                    source: payload["source"],
+                    originator: payload["originator"]
+                )
                 continue
             }
 
@@ -182,7 +195,8 @@ struct CodexConversationScanner: Sendable {
             cwd: cwd,
             createdAt: createdAt,
             title: title,
-            isSubagent: isSubagent
+            isSubagent: isSubagent,
+            surface: surface
         )
     }
 
@@ -219,6 +233,28 @@ struct CodexConversationScanner: Sendable {
             return source["subagent"] != nil
         }
         return false
+    }
+
+    private static func conversationSurface(
+        source: Any?,
+        originator: Any?
+    ) -> CodexConversationSurface {
+        let sourceName = (source as? String)?.lowercased() ?? ""
+        let originatorName = (originator as? String)?.lowercased() ?? ""
+
+        if sourceName == "cli"
+            || originatorName == "codex-tui"
+            || originatorName.contains("codex-cli")
+            || originatorName.contains("codex_cli")
+        {
+            return .cli
+        }
+
+        if sourceName == "vscode" || originatorName.contains("desktop") {
+            return .desktop
+        }
+
+        return .unknown
     }
 
     private static func normalizedTitle(_ raw: String?) -> String? {
@@ -262,4 +298,5 @@ private struct ConversationMetadata {
     let createdAt: Date?
     let title: String?
     let isSubagent: Bool
+    let surface: CodexConversationSurface
 }

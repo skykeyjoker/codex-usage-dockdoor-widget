@@ -1,10 +1,54 @@
 # Discord sharing draft
 
+## v1.1.0 update reply
+
+Thanks for the detailed feedback — Codex Usage v1.1.0 is now available:
+
+https://github.com/skykeyjoker/codex-usage-dockdoor-widget/releases/tag/v1.1.0
+
+This update focuses on making the widget easier to read and much easier to
+tailor to different workflows:
+
+- Added **Simplified**, **Full**, and **Custom** Panel presets. Each content
+  page can be hidden, and cards on every page can be shown/hidden and reordered.
+- Added Token formatting choices: adaptive, exact, `240.18M`, `240.2M`, or
+  `0.24B`.
+- Added an optional bottom launcher for **GPT Classic**, **Codex Desktop**, and
+  **Codex CLI**. Each button can be enabled independently, and Terminal,
+  Ghostty, iTerm2, or Warp can be selected for CLI actions.
+- Recent sessions now distinguish Codex Desktop from Codex CLI. Clicking a CLI
+  session resumes it in the selected terminal; Desktop sessions still open in
+  Codex Desktop.
+- Smoothed the hover-metric transition in Projects & Tasks and kept a compact
+  metrics HUD visible when the source cards scroll out of view.
+- Improved two-/three-slot readability, shared ring styling, chart hover
+  feedback, Panel card styling, and numeric typography.
+- Regenerated all README screenshots directly from the current SwiftUI code at
+  Retina resolution using anonymous fixture data.
+
+Privacy behavior is unchanged: there is no telemetry or custom backend, local
+Codex logs stay local, and displayed costs remain API-equivalent estimates —
+not subscription billing.
+
+For this reply, attach these updated screenshots in order:
+
+1. `assets/dock-layouts.png`
+2. `assets/panel-settings.png`
+3. `assets/panel-overview.png`
+4. `assets/panel-insights-official.png`
+5. `assets/panel-insights-local.png`
+6. `assets/panel-conversations.png`
+7. `assets/panel-status.png`
+
+---
+
+## Original thread starter draft
+
 ## Forum title
 
 **Codex Usage for DockDoor Pro — quota, activity, local analytics, tasks & status**
 
-## Post body
+### Post body
 
 I built an independent Codex Usage widget for DockDoor Pro and am sharing the
 source plus a universal Apple Silicon/Intel bundle here:

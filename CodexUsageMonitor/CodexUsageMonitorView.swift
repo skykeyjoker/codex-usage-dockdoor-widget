@@ -12,6 +12,7 @@ struct CodexUsageMonitorView: View {
 
     private static let carouselInterval: TimeInterval = 8
     private var dim: CGFloat { min(size.width, size.height) }
+    private var horizontalRingMetricSpacing: CGFloat { dim * 0.14 }
     private var slotSpan: WidgetSlotSpan { WidgetSlotSpan.detect(size: size, isVertical: isVertical) }
     private var theme: CodexThemeColors {
         CodexColorTheme.resolve(widgetId: widgetId).colors(for: appearance)
@@ -147,7 +148,7 @@ struct CodexUsageMonitorView: View {
                         metric(window, centered: true)
                     }
                 } else {
-                    HStack(spacing: dim * 0.08) {
+                    HStack(spacing: horizontalRingMetricSpacing) {
                         multiSlotRing(
                             window,
                             style: style,
@@ -182,7 +183,7 @@ struct CodexUsageMonitorView: View {
                         if showStatus { serviceBadge }
                     }
                 } else {
-                    HStack(spacing: dim * WidgetMetrics.spacingScale) {
+                    HStack(spacing: horizontalRingMetricSpacing) {
                         if let weekly = usage.weeklyWindow {
                             multiSlotRing(
                                 weekly,

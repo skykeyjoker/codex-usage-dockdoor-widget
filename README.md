@@ -8,7 +8,12 @@ Dock and a native SwiftUI panel.
 > This widget is distributed independently and is not part of the DockDoor Pro
 > marketplace. Installation is manual.
 
-## What's new in 1.1.0
+## What's new in 1.1.1
+
+- Two- and three-slot Dock layouts now provide clearer separation between the
+  quota ring and the adjacent percentage, reset, and service-status metrics.
+
+## 1.1.0 highlights
 
 - Choose **Simplified**, **Full**, or **Custom** Panel content. Individual
   pages and cards can be hidden, and cards can be reordered within each page.

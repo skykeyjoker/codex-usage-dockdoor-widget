@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.1 - 2026-08-11
+
+- Increased the horizontal separation between the quota ring and its adjacent
+  metrics in two- and three-slot Dock layouts for clearer visual grouping.
+
 ## 1.1.0 - 2026-08-05
 
 - Added Simplified, Full, and Custom Panel-content presets.

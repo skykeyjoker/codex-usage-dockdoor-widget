@@ -5,34 +5,52 @@ import SwiftUI
 /// The view owns its card styling so it can be embedded without depending on
 /// panel-private implementation details.
 struct CodexLocalInsightsView: View {
+    private static let hourlyCellHeight: CGFloat = 8
+    private static let hourlyRowSpacing: CGFloat = 3
+    private static let hourlySundayHitPadding: CGFloat = 3
+    private static var hourlyGridHeight: CGFloat {
+        hourlyCellHeight * 7 + hourlyRowSpacing * 6 + hourlySundayHitPadding
+    }
+
     let snapshot: CodexRecentUsageSnapshot
     let primary: Color
     let secondary: Color
     let tokenFormat: CodexTokenFormat
     let cardOrder: [CodexPanelCardID]
+    let showsPeriodHeader: Bool
+    let hourlyActivityRange: CodexHourlyActivityRange
 
     @Environment(\.colorScheme) private var colorScheme
     @State private var period: Period = .sevenDays
     @State private var hoveredMetric: String?
     @State private var hoveredModel: String?
+    @State private var hoveredHourID: String?
+    @State private var hoveredHourLocation: CGPoint?
+    @State private var hourlyTooltipSize = CGSize(width: 142, height: 48)
 
     init(
         snapshot: CodexRecentUsageSnapshot,
         primary: Color,
         secondary: Color,
         tokenFormat: CodexTokenFormat,
-        cardOrder: [CodexPanelCardID] = CodexPanelCustomizationSection.localInsights.defaultCards
+        cardOrder: [CodexPanelCardID] = CodexPanelCustomizationSection.localInsights.defaultCards,
+        showsPeriodHeader: Bool = true,
+        hourlyActivityRange: CodexHourlyActivityRange = .currentWeek
     ) {
         self.snapshot = snapshot
         self.primary = primary
         self.secondary = secondary
         self.tokenFormat = tokenFormat
         self.cardOrder = cardOrder
+        self.showsPeriodHeader = showsPeriodHeader
+        self.hourlyActivityRange = hourlyActivityRange
     }
 
     var body: some View {
         VStack(spacing: 12) {
-            periodHeader
+            if showsPeriodHeader {
+                periodHeader
+            }
             ForEach(cardOrder) { card in
                 localCard(card)
             }
@@ -44,6 +62,8 @@ struct CodexLocalInsightsView: View {
         switch card {
         case .localSummary:
             summaryCard
+        case .localHourlyActivity:
+            hourlyActivityCard
         case .localComposition:
             tokenCompositionCard
         case .localTopModels:
@@ -74,7 +94,7 @@ struct CodexLocalInsightsView: View {
             .labelsHidden()
             .pickerStyle(.segmented)
             .controlSize(.small)
-            .frame(width: 132)
+            .frame(width: 180)
             .help(
                 CodexLocalization.text(
                     "切换本机日志统计周期",
@@ -107,7 +127,7 @@ struct CodexLocalInsightsView: View {
                 id: "cost",
                 icon: "dollarsign.circle",
                 title: CodexLocalization.text("等价费用", "API equivalent"),
-                value: currency(summary.estimatedCostUSD),
+                value: estimatedCostText(summary.estimatedCostUSD, coverage: summary.costCoverage),
                 help: CodexLocalization.text(
                     "依据 API 价格目录计算的等价费用，不是订阅账单",
                     "API-equivalent estimate from the pricing catalog, not a subscription bill"
@@ -127,7 +147,7 @@ struct CodexLocalInsightsView: View {
                 id: "activeDays",
                 icon: "calendar.badge.checkmark",
                 title: CodexLocalization.text("活跃日", "Active days"),
-                value: "\(summary.activeDays) / \(max(summary.dayCount, period.dayCount))",
+                value: "\(summary.activeDays) / \(max(summary.dayCount, periodDayCount))",
                 help: CodexLocalization.text(
                     "统计周期内至少产生过 Token 的天数",
                     "Days with at least one recorded token in this period"
@@ -156,6 +176,387 @@ struct CodexLocalInsightsView: View {
         }
         .padding(10)
         .background(cardBackground)
+    }
+
+    private var hourlyActivityCard: some View {
+        hourlyHeatmap
+            .padding(10)
+            .background(cardBackground)
+    }
+
+    private var hourlyHeatmap: some View {
+        let hourlyUsage = hourlyActivityRange == .currentWeek
+            ? snapshot.hourly
+            : snapshot.hourlyLastYear
+        let buckets = Dictionary(uniqueKeysWithValues: hourlyUsage.map { ($0.id, $0) })
+        let nonzeroValues = hourlyUsage.map(\.tokens).filter { $0 > 0 }.sorted()
+        let referenceIndex = max(0, Int(Double(max(0, nonzeroValues.count - 1)) * 0.90))
+        let referenceValue = max(
+            1,
+            nonzeroValues.isEmpty ? 1 : nonzeroValues[referenceIndex]
+        )
+        let weekdayLabels = CodexLocalization.isChinese
+            ? ["一", "二", "三", "四", "五", "六", "日"]
+            : ["M", "T", "W", "T", "F", "S", "S"]
+
+        return VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Label(
+                    CodexLocalization.text("小时活跃度", "Hourly activity"),
+                    systemImage: "clock.badge"
+                )
+                .font(.system(size: 9.5, weight: .semibold))
+                .foregroundStyle(
+                    Color.secondary.opacity(colorScheme == .dark ? 0.94 : 0.84)
+                )
+                Spacer()
+                Label(
+                    CodexLocalization.text("本地", "Local") + " · " + hourlyActivityRange.title,
+                    systemImage: "internaldrive"
+                )
+                    .font(.system(size: 7.5, weight: .medium))
+                    .foregroundStyle(
+                        Color.secondary.opacity(colorScheme == .dark ? 0.70 : 0.56)
+                    )
+                    .help(CodexLocalization.text(
+                        "来自本机 Codex 会话日志，统计范围：\(hourlyActivityRange.title)",
+                        "From local Codex session logs · Range: \(hourlyActivityRange.title)"
+                    ))
+            }
+
+            GeometryReader { proxy in
+                #if CODEX_USAGE_TESTING
+                let activeHourID = hoveredHourID
+                    ?? UserDefaults.standard.string(forKey: "codexUsage.testing.hoveredHourID")
+                #else
+                let activeHourID = hoveredHourID
+                #endif
+                let hasHoveredHour = activeHourID != nil
+
+                ZStack(alignment: .topLeading) {
+                    VStack(spacing: Self.hourlyRowSpacing) {
+                        ForEach(0..<7, id: \.self) { weekdayIndex in
+                            HStack(spacing: 2) {
+                                Text(weekdayLabels[weekdayIndex])
+                                    .font(.system(size: 6.5, weight: .semibold, design: .monospaced))
+                                    .foregroundStyle(
+                                        Color.secondary.opacity(colorScheme == .dark ? 0.74 : 0.60)
+                                    )
+                                    .frame(width: 9)
+                                ForEach(0..<24, id: \.self) { hour in
+                                    let rawWeekday = weekdayIndex == 6 ? 1 : weekdayIndex + 2
+                                    let id = "\(rawWeekday)-\(hour)"
+                                    let bucket = buckets[id]
+                                    let tokens = bucket?.tokens ?? 0
+                                    let intensity = min(
+                                        1,
+                                        sqrt(Double(tokens) / Double(referenceValue))
+                                    )
+                                    let isHovered = activeHourID == id
+                                    RoundedRectangle(cornerRadius: 1.5, style: .continuous)
+                                        .fill(
+                                            hourlyCellColor(
+                                                tokens: tokens,
+                                                intensity: intensity,
+                                                isHovered: isHovered,
+                                                isDimmed: hasHoveredHour && !isHovered
+                                            )
+                                        )
+                                        .overlay {
+                                            RoundedRectangle(cornerRadius: 1.5, style: .continuous)
+                                                .strokeBorder(
+                                                    isHovered ? Color.white.opacity(0.82) : .clear,
+                                                    lineWidth: 0.7
+                                                )
+                                        }
+                                        .scaleEffect(isHovered ? 1.14 : 1)
+                                        .frame(
+                                            maxWidth: .infinity,
+                                            minHeight: Self.hourlyCellHeight,
+                                            maxHeight: Self.hourlyCellHeight
+                                        )
+                                        .zIndex(isHovered ? 2 : 0)
+                                }
+                            }
+                        }
+                    }
+
+                    if let activeHourID,
+                       let hovered = hourlyBucket(
+                           id: activeHourID,
+                           buckets: buckets
+                       )
+                    {
+                        let pointer = hoveredHourLocation
+                            ?? CGPoint(x: proxy.size.width * 0.68, y: proxy.size.height * 0.48)
+                        let origin = hourlyTooltipOrigin(
+                            pointer: pointer,
+                            tooltipSize: hourlyTooltipSize,
+                            chartSize: proxy.size
+                        )
+                        hourlyTooltip(
+                            weekday: hovered.weekday,
+                            hour: hovered.hour,
+                            bucket: hovered.bucket
+                        )
+                        .background {
+                            GeometryReader { tooltipProxy in
+                                Color.clear.preference(
+                                    key: CodexHourlyTooltipSizePreferenceKey.self,
+                                    value: tooltipProxy.size
+                                )
+                            }
+                        }
+                        .offset(x: origin.x, y: origin.y)
+                        .transition(.opacity.combined(with: .scale(scale: 0.96)))
+                        .allowsHitTesting(false)
+                        .zIndex(5)
+                    }
+                }
+                .contentShape(Rectangle())
+                .onContinuousHover { phase in
+                    switch phase {
+                    case let .active(location):
+                        updateHourlyHover(at: location, chartSize: proxy.size)
+                    case .ended:
+                        hoveredHourID = nil
+                        hoveredHourLocation = nil
+                    }
+                }
+                .onPreferenceChange(CodexHourlyTooltipSizePreferenceKey.self) { size in
+                    guard size.width > 0, size.height > 0 else { return }
+                    hourlyTooltipSize = size
+                }
+                .animation(.easeOut(duration: 0.13), value: activeHourID)
+            }
+            .frame(height: Self.hourlyGridHeight)
+
+            HStack {
+                Text("00")
+                Spacer()
+                Text("06")
+                Spacer()
+                Text("12")
+                Spacer()
+                Text("18")
+                Spacer()
+                Text("23")
+            }
+            .font(.system(size: 6.5, weight: .medium, design: .monospaced))
+            .foregroundStyle(
+                Color.secondary.opacity(colorScheme == .dark ? 0.66 : 0.52)
+            )
+            .padding(.leading, 11)
+            .frame(height: 11, alignment: .top)
+
+            HStack(spacing: 8) {
+                Text(hourlyDateRange)
+                Spacer(minLength: 8)
+                Text(CodexLocalization.text(
+                    "悬停查看每小时 Token",
+                    "Hover for hourly tokens"
+                ))
+            }
+            .font(.system(size: 8.5, weight: .medium))
+            .foregroundStyle(.tertiary)
+            .padding(.top, 2)
+        }
+    }
+
+    private var hourlyDateRange: String {
+        var calendar = Calendar(identifier: .iso8601)
+        calendar.locale = CodexLocalization.locale
+        calendar.timeZone = TimeZone(identifier: snapshot.timeZoneIdentifier) ?? .current
+
+        let referenceDate = snapshot.historyEnd ?? snapshot.updatedAt
+        let end = calendar.startOfDay(for: referenceDate)
+        switch hourlyActivityRange {
+        case .currentWeek:
+            let weekday = calendar.component(.weekday, from: end)
+            let mondayOffset = (weekday + 5) % 7
+            let start = calendar.date(byAdding: .day, value: -mondayOffset, to: end) ?? end
+            let weekEnd = calendar.date(byAdding: .day, value: 6, to: start) ?? end
+            return "\(hourlyDayLabel(start)) – \(hourlyDayLabel(weekEnd))"
+        case .lastYear:
+            let start = snapshot.historyStart
+                ?? calendar.date(byAdding: .day, value: -364, to: end)
+                ?? end
+            return "\(hourlyMonthLabel(start)) – \(hourlyMonthLabel(end))"
+        }
+    }
+
+    private func hourlyDayLabel(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .iso8601)
+        formatter.locale = CodexLocalization.locale
+        formatter.timeZone = TimeZone(identifier: snapshot.timeZoneIdentifier) ?? .current
+        formatter.dateFormat = CodexLocalization.isChinese ? "M月d日" : "MMM d"
+        return formatter.string(from: date)
+    }
+
+    private func hourlyMonthLabel(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .iso8601)
+        formatter.locale = CodexLocalization.locale
+        formatter.timeZone = TimeZone(identifier: snapshot.timeZoneIdentifier) ?? .current
+        formatter.dateFormat = CodexLocalization.isChinese ? "yy年M月" : "MMM yy"
+        return formatter.string(from: date)
+    }
+
+    private func hourlyCellColor(
+        tokens: Int,
+        intensity: Double,
+        isHovered: Bool,
+        isDimmed: Bool
+    ) -> Color {
+        if isHovered {
+            return primary.opacity(colorScheme == .dark ? 0.98 : 0.92)
+        }
+
+        if tokens == 0 {
+            if isDimmed {
+                return Color.primary.opacity(colorScheme == .dark ? 0.035 : 0.022)
+            }
+            return Color.primary.opacity(colorScheme == .dark ? 0.075 : 0.045)
+        }
+
+        let baseOpacity = colorScheme == .dark
+            ? 0.26 + intensity * 0.64
+            : 0.18 + intensity * 0.58
+        return primary.opacity(isDimmed ? baseOpacity * 0.28 : baseOpacity)
+    }
+
+    private func hourlyBucket(
+        id: String,
+        buckets: [String: CodexHourlyUsageBucket]
+    ) -> (weekday: Int, hour: Int, bucket: CodexHourlyUsageBucket?)? {
+        let parts = id.split(separator: "-", maxSplits: 1)
+        guard parts.count == 2,
+              let weekday = Int(parts[0]),
+              let hour = Int(parts[1]),
+              (1...7).contains(weekday),
+              (0...23).contains(hour)
+        else {
+            return nil
+        }
+        return (weekday, hour, buckets[id])
+    }
+
+    private func updateHourlyHover(at location: CGPoint, chartSize: CGSize) {
+        let labelWidth: CGFloat = 9
+        let spacing: CGFloat = 2
+        let gridStartX = labelWidth + spacing
+        let rowHeight = Self.hourlyCellHeight
+        let rowSpacing = Self.hourlyRowSpacing
+        let rowStride = rowHeight + rowSpacing
+        let gridWidth = chartSize.width - gridStartX
+        let cellWidth = (gridWidth - spacing * 23) / 24
+        let cellStride = cellWidth + spacing
+
+        guard chartSize.width > gridStartX,
+              cellWidth > 0,
+              location.x >= gridStartX,
+              location.x <= chartSize.width,
+              location.y >= 0,
+              location.y <= chartSize.height
+        else {
+            hoveredHourID = nil
+            hoveredHourLocation = nil
+            return
+        }
+
+        let weekdayIndex = min(6, max(0, Int(location.y / rowStride)))
+        let relativeX = location.x - gridStartX
+        let hour = min(23, max(0, Int(relativeX / cellStride)))
+        let rawWeekday = weekdayIndex == 6 ? 1 : weekdayIndex + 2
+        hoveredHourID = "\(rawWeekday)-\(hour)"
+        hoveredHourLocation = location
+    }
+
+    private func hourlyTooltip(
+        weekday: Int,
+        hour: Int,
+        bucket: CodexHourlyUsageBucket?
+    ) -> some View {
+        let tokens = bucket?.tokens ?? 0
+        let requests = bucket?.requestCount ?? 0
+        let tokenText = tokens.formatted(.number.locale(CodexLocalization.locale))
+        let requestText = requests.formatted(.number.locale(CodexLocalization.locale))
+        let timeRange = String(format: "%02d:00–%02d:00", hour, hour + 1)
+
+        return VStack(alignment: .leading, spacing: 3) {
+            Text("\(hourlyWeekdayTitle(weekday)) · \(timeRange)")
+                .font(.system(size: 8.5, weight: .semibold))
+                .lineLimit(1)
+
+            Text("\(tokenText) API tokens")
+                .font(CodexTypography.tokenNumber(size: 8, weight: .semibold))
+                .foregroundStyle(primary)
+                .lineLimit(1)
+
+            Text(
+                CodexLocalization.text(
+                    "\(requestText) 次请求",
+                    "\(requestText) requests"
+                )
+            )
+            .font(CodexTypography.tokenNumber(size: 7.5, weight: .medium))
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+        }
+        .padding(.horizontal, 7)
+        .padding(.vertical, 5)
+        .background(hourlyTooltipBackground, in: RoundedRectangle(cornerRadius: 6))
+        .overlay {
+            RoundedRectangle(cornerRadius: 6)
+                .strokeBorder(primary.opacity(0.32), lineWidth: 0.65)
+        }
+        .shadow(
+            color: .black.opacity(colorScheme == .dark ? 0.34 : 0.16),
+            radius: 5,
+            y: 2
+        )
+    }
+
+    private var hourlyTooltipBackground: Color {
+        colorScheme == .dark
+            ? Color(red: 0.14, green: 0.17, blue: 0.21)
+            : Color(red: 0.87, green: 0.93, blue: 0.97)
+    }
+
+    private func hourlyWeekdayTitle(_ weekday: Int) -> String {
+        if CodexLocalization.isChinese {
+            return ["", "周日", "周一", "周二", "周三", "周四", "周五", "周六"][
+                min(7, max(1, weekday))
+            ]
+        }
+        return ["", "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"][
+            min(7, max(1, weekday))
+        ]
+    }
+
+    private func hourlyTooltipOrigin(
+        pointer: CGPoint,
+        tooltipSize: CGSize,
+        chartSize: CGSize
+    ) -> CGPoint {
+        let margin: CGFloat = 2
+        let gap: CGFloat = 8
+        let width = max(tooltipSize.width, 1)
+        let height = max(tooltipSize.height, 1)
+
+        let preferredRightX = pointer.x + gap
+        let x = preferredRightX + width <= chartSize.width - margin
+            ? preferredRightX
+            : max(margin, pointer.x - gap - width)
+
+        let preferredAboveY = pointer.y - gap - height
+        let maxY = max(margin, chartSize.height - height - margin)
+        let y = preferredAboveY >= margin
+            ? min(preferredAboveY, maxY)
+            : min(maxY, pointer.y + gap)
+
+        return CGPoint(x: x, y: max(margin, y))
     }
 
     private func summaryMetric(
@@ -441,7 +842,10 @@ struct CodexLocalInsightsView: View {
                     .font(CodexTypography.tokenNumber(size: 10, weight: .bold))
                     .monospacedDigit()
                 HStack(spacing: 4) {
-                    Text(currency(model.estimatedCostUSD))
+                    Text(estimatedCostText(
+                        model.estimatedCostUSD,
+                        coverage: model.costCoverage ?? .empty
+                    ))
                     Text(percent(share))
                 }
                 .font(CodexTypography.tokenNumber(size: 8, weight: .medium))
@@ -489,10 +893,16 @@ struct CodexLocalInsightsView: View {
 
                 Text(
                     CodexLocalization.text("价格来源：", "Pricing source: ")
-                        + (snapshot.pricingSource
-                            ?? CodexLocalization.text("内置价表", "Built-in pricing"))
+                        + summary.costProvenance.title
                 )
                 .foregroundStyle(.tertiary)
+
+                Text(costCoverageText(summary.costCoverage))
+                    .foregroundStyle(
+                        summary.costCoverage.isComplete
+                            ? Color.secondary.opacity(0.68)
+                            : primary
+                    )
             }
 
             Spacer(minLength: 0)
@@ -509,9 +919,15 @@ struct CodexLocalInsightsView: View {
     }
 
     private var summary: CodexUsagePeriodSummary {
-        period == .sevenDays
-            ? snapshot.last7DaysSummary
-            : snapshot.last30DaysSummary
+        switch period {
+        case .sevenDays: snapshot.last7DaysSummary
+        case .thirtyDays: snapshot.last30DaysSummary
+        case .allTime: snapshot.allTimeSummary
+        }
+    }
+
+    private var periodDayCount: Int {
+        period == .allTime ? max(1, snapshot.daily.count) : period.dayCount
     }
 
     private var compositionItems: [CompositionItem] {
@@ -595,10 +1011,12 @@ struct CodexLocalInsightsView: View {
                 "Change in total tokens versus the preceding seven days"
             )
         }
-        return CodexLocalization.text(
-            "当前本机扫描范围为 30 日，尚无前一个 30 日周期作为基准",
-            "The current local scan covers 30 days, so a prior 30-day baseline is unavailable"
-        )
+        return period == .allTime
+            ? CodexLocalization.text("全部历史没有可比较的前置周期", "All-time history has no preceding comparison period")
+            : CodexLocalization.text(
+                "当前本机扫描范围为 30 日，尚无前一个 30 日周期作为基准",
+                "The current local scan covers 30 days, so a prior 30-day baseline is unavailable"
+            )
     }
 
     private var compositionHelp: String {
@@ -682,6 +1100,25 @@ struct CodexLocalInsightsView: View {
         return String(format: "$%.2f", value)
     }
 
+    private func estimatedCostText(
+        _ value: Double?,
+        coverage: CodexCostCoverage
+    ) -> String {
+        let formatted = currency(value)
+        guard value != nil, !coverage.isComplete else { return formatted }
+        return "~\(formatted)"
+    }
+
+    private func costCoverageText(_ coverage: CodexCostCoverage) -> String {
+        guard let percent = coverage.tokenPercent else {
+            return CodexLocalization.text("暂无可计价 Token", "No priceable tokens")
+        }
+        return CodexLocalization.text(
+            "费用覆盖：\(Int(percent.rounded()))% · \(coverage.pricedRequests)/\(coverage.totalRequests) 次请求",
+            "Cost coverage: \(Int(percent.rounded()))% · \(coverage.pricedRequests)/\(coverage.totalRequests) requests"
+        )
+    }
+
     private func percent(_ value: Double?) -> String {
         guard let value else { return "—" }
         return String(format: "%.0f%%", min(100, max(0, value)))
@@ -690,7 +1127,9 @@ struct CodexLocalInsightsView: View {
     private func formattedDay(_ dayKey: String?) -> String? {
         guard let dayKey else { return nil }
         let parser = DateFormatter()
+        parser.calendar = Calendar(identifier: .gregorian)
         parser.locale = Locale(identifier: "en_US_POSIX")
+        parser.timeZone = TimeZone(identifier: snapshot.timeZoneIdentifier) ?? .current
         parser.dateFormat = "yyyy-MM-dd"
         guard let date = parser.date(from: dayKey) else { return dayKey }
 
@@ -703,23 +1142,43 @@ struct CodexLocalInsightsView: View {
     private enum Period: String, CaseIterable, Identifiable {
         case sevenDays
         case thirtyDays
+        case allTime
 
         var id: String { rawValue }
-        var dayCount: Int { self == .sevenDays ? 7 : 30 }
+        var dayCount: Int {
+            switch self {
+            case .sevenDays: 7
+            case .thirtyDays: 30
+            case .allTime: 365
+            }
+        }
         var title: String {
             switch self {
             case .sevenDays:
                 return CodexLocalization.text("7 日", "7 days")
             case .thirtyDays:
                 return CodexLocalization.text("30 日", "30 days")
+            case .allTime:
+                return CodexLocalization.text("全部", "All")
             }
         }
     }
 
-    private struct CompositionItem: Identifiable {
+private struct CompositionItem: Identifiable {
         let id: String
         let title: String
         let value: Int
         let color: Color
+    }
+}
+
+private struct CodexHourlyTooltipSizePreferenceKey: PreferenceKey {
+    static var defaultValue: CGSize = .zero
+
+    static func reduce(value: inout CGSize, nextValue: () -> CGSize) {
+        let next = nextValue()
+        if next.width > 0, next.height > 0 {
+            value = next
+        }
     }
 }

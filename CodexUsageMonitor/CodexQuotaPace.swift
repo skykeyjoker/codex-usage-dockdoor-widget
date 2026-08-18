@@ -7,6 +7,8 @@ struct CodexQuotaPaceInsight: Codable, Equatable, Identifiable {
     let expectedUsedPercent: Double?
     let deltaPercent: Double?
     let percentPerHour: Double?
+    var recentPercentPerHour: Double? = nil
+    var cycleAveragePercentPerHour: Double? = nil
     let projectedExhaustionAt: Date?
     let resetAt: Date?
     let willLastToReset: Bool?
@@ -129,6 +131,18 @@ struct CodexQuotaPaceStore {
             guard interval >= 60 else { return nil }
             let consumed = last.usedPercent - first.usedPercent
             guard consumed >= 0 else { return nil }
+            // Quota percentages are integer-quantized. A 1% jump observed
+            // over only a few minutes does not reveal when that usage
+            // actually happened, so extrapolating it to a daily rate creates
+            // extreme spikes. Zero movement is still meaningful after one
+            // minute; positive movement needs a longer observation horizon.
+            if consumed > 0 {
+                let minimumPositiveInterval = max(
+                    10 * 60,
+                    min(60 * 60, duration > 0 ? duration / 10 : 60 * 60)
+                )
+                guard interval >= minimumPositiveInterval else { return nil }
+            }
             return consumed / interval * 3600
         }()
         let averageRate: Double? = {
@@ -159,6 +173,8 @@ struct CodexQuotaPaceStore {
             expectedUsedPercent: expectedUsedPercent,
             deltaPercent: delta,
             percentPerHour: rate,
+            recentPercentPerHour: sampledRate,
+            cycleAveragePercentPerHour: averageRate,
             projectedExhaustionAt: projection.date,
             resetAt: window.resetAt,
             willLastToReset: projection.lasts,

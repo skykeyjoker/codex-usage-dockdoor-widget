@@ -1,7 +1,9 @@
 import Foundation
+import SQLite3
 
 struct CodexLocalUsageScanner: Sendable {
-    private static let cacheVersion = 7
+    private static let cacheVersion = 8
+    private static let defaultHistoryDays = 365
     private static let inheritedForkEventWindow: TimeInterval = 1
     private static let activeSessionWindow: TimeInterval = 15 * 60
     private static let topModelLimit = 8
@@ -96,6 +98,156 @@ struct CodexLocalUsageScanner: Sendable {
         var files: [String: CachedFile]
     }
 
+    private final class SQLiteCacheStore {
+        private enum StoreError: Error {
+            case open
+            case sqlite(Int32)
+        }
+
+        private static let schemaVersion: Int32 = 1
+        private static let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+        private var database: OpaquePointer?
+
+        init(url: URL) throws {
+            try FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            guard sqlite3_open_v2(
+                url.path,
+                &database,
+                SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX,
+                nil
+            ) == SQLITE_OK else {
+                sqlite3_close(database)
+                throw StoreError.open
+            }
+            sqlite3_busy_timeout(database, 500)
+            try execute("PRAGMA journal_mode = WAL")
+            try execute("PRAGMA synchronous = NORMAL")
+            let currentVersion = userVersion()
+            if currentVersion != 0, currentVersion != Self.schemaVersion {
+                try execute("DROP TABLE IF EXISTS files")
+            }
+            try execute("""
+                CREATE TABLE IF NOT EXISTS files (
+                    path TEXT PRIMARY KEY,
+                    size INTEGER NOT NULL,
+                    modified_at REAL NOT NULL,
+                    payload BLOB NOT NULL
+                )
+                """)
+            try execute("PRAGMA user_version = \(Self.schemaVersion)")
+        }
+
+        deinit { sqlite3_close(database) }
+
+        func load(cacheVersion: Int) throws -> ScannerCache {
+            let sql = "SELECT path, payload FROM files"
+            var statement: OpaquePointer?
+            guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK else {
+                throw StoreError.sqlite(sqlite3_errcode(database))
+            }
+            defer { sqlite3_finalize(statement) }
+
+            var files: [String: CachedFile] = [:]
+            while sqlite3_step(statement) == SQLITE_ROW {
+                guard let pathPointer = sqlite3_column_text(statement, 0),
+                      let blob = sqlite3_column_blob(statement, 1)
+                else { continue }
+                let count = Int(sqlite3_column_bytes(statement, 1))
+                guard count > 0 else { continue }
+                let path = String(cString: pathPointer)
+                let data = Data(bytes: blob, count: count)
+                if let cached = try? JSONDecoder().decode(CachedFile.self, from: data) {
+                    files[path] = cached
+                }
+            }
+            return ScannerCache(version: cacheVersion, files: files)
+        }
+
+        func apply(
+            cache: ScannerCache,
+            updatedPaths: Set<String>,
+            removedPaths: Set<String>
+        ) throws {
+            try execute("BEGIN IMMEDIATE")
+            do {
+                for path in removedPaths {
+                    try delete(path: path)
+                }
+                for path in updatedPaths {
+                    guard let cached = cache.files[path] else { continue }
+                    try upsert(path: path, cached: cached)
+                }
+                try execute("COMMIT")
+            } catch {
+                try? execute("ROLLBACK")
+                throw error
+            }
+        }
+
+        private func upsert(path: String, cached: CachedFile) throws {
+            let sql = """
+                INSERT INTO files(path, size, modified_at, payload)
+                VALUES(?, ?, ?, ?)
+                ON CONFLICT(path) DO UPDATE SET
+                    size = excluded.size,
+                    modified_at = excluded.modified_at,
+                    payload = excluded.payload
+                """
+            var statement: OpaquePointer?
+            guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK else {
+                throw StoreError.sqlite(sqlite3_errcode(database))
+            }
+            defer { sqlite3_finalize(statement) }
+            sqlite3_bind_text(statement, 1, path, -1, Self.transient)
+            sqlite3_bind_int64(statement, 2, cached.size)
+            sqlite3_bind_double(statement, 3, cached.modifiedAt.timeIntervalSince1970)
+            let payload = try JSONEncoder().encode(cached)
+            let result = payload.withUnsafeBytes { bytes in
+                sqlite3_bind_blob(
+                    statement,
+                    4,
+                    bytes.baseAddress,
+                    Int32(payload.count),
+                    Self.transient
+                )
+            }
+            guard result == SQLITE_OK, sqlite3_step(statement) == SQLITE_DONE else {
+                throw StoreError.sqlite(sqlite3_errcode(database))
+            }
+        }
+
+        private func delete(path: String) throws {
+            var statement: OpaquePointer?
+            guard sqlite3_prepare_v2(database, "DELETE FROM files WHERE path = ?", -1, &statement, nil)
+                == SQLITE_OK
+            else { throw StoreError.sqlite(sqlite3_errcode(database)) }
+            defer { sqlite3_finalize(statement) }
+            sqlite3_bind_text(statement, 1, path, -1, Self.transient)
+            guard sqlite3_step(statement) == SQLITE_DONE else {
+                throw StoreError.sqlite(sqlite3_errcode(database))
+            }
+        }
+
+        private func execute(_ sql: String) throws {
+            guard sqlite3_exec(database, sql, nil, nil, nil) == SQLITE_OK else {
+                throw StoreError.sqlite(sqlite3_errcode(database))
+            }
+        }
+
+        private func userVersion() -> Int32 {
+            var statement: OpaquePointer?
+            guard sqlite3_prepare_v2(database, "PRAGMA user_version", -1, &statement, nil)
+                == SQLITE_OK
+            else { return 0 }
+            defer { sqlite3_finalize(statement) }
+            guard sqlite3_step(statement) == SQLITE_ROW else { return 0 }
+            return sqlite3_column_int(statement, 0)
+        }
+    }
+
     private struct DayAccumulator {
         var input = 0
         var cached = 0
@@ -107,8 +259,17 @@ struct CodexLocalUsageScanner: Sendable {
         var turnIDs: Set<String> = []
         var knownCost = 0.0
         var hasKnownCost = false
+        var pricedTokens = 0
+        var pricedRequests = 0
         var usedDynamicPricing = false
         var usedBuiltInPricing = false
+
+        var totalTokens: Int { input + output }
+    }
+
+    private struct HourAccumulator {
+        var tokens = 0
+        var requestCount = 0
     }
 
     private struct UsageAccumulator {
@@ -123,11 +284,15 @@ struct CodexLocalUsageScanner: Sendable {
         var turnIDs: Set<String> = []
         var knownCost = 0.0
         var hasKnownCost = false
+        var pricedTokens = 0
+        var pricedRequests = 0
+        var usedDynamicPricing = false
+        var usedBuiltInPricing = false
 
         mutating func add(
             _ event: TokenEvent,
             isPriority: Bool,
-            estimatedCost: Double?
+            estimate: CodexPricingEngine.Result?
         ) {
             input += event.input
             cached += event.cached
@@ -140,10 +305,33 @@ struct CodexLocalUsageScanner: Sendable {
                 priorityTokens += event.tokens
                 priorityRequestCount += 1
             }
-            if let estimatedCost {
-                knownCost += estimatedCost
+            if let estimate {
+                knownCost += estimate.cost
                 hasKnownCost = true
+                pricedTokens += event.tokens
+                pricedRequests += 1
+                switch estimate.source {
+                case .dynamic: usedDynamicPricing = true
+                case .builtIn, .priority: usedBuiltInPricing = true
+                }
             }
+        }
+
+        var costCoverage: CodexCostCoverage {
+            CodexCostCoverage(
+                pricedTokens: pricedTokens,
+                totalTokens: input + output,
+                pricedRequests: pricedRequests,
+                totalRequests: requestCount
+            )
+        }
+
+        var costProvenance: CodexCostProvenance {
+            CodexLocalUsageScanner.costProvenance(
+                usedDynamic: usedDynamicPricing,
+                usedBuiltIn: usedBuiltInPricing,
+                totalTokens: input + output
+            )
         }
     }
 
@@ -167,33 +355,57 @@ struct CodexLocalUsageScanner: Sendable {
         var activeTurnIDs: Set<String> = []
     }
 
-    func scan(historyDays: Int = 30) async throws -> CodexRecentUsageSnapshot {
+    func scan(
+        historyDays: Int = Self.defaultHistoryDays,
+        progress: (@Sendable (CodexLocalScanCoverage) -> Void)? = nil
+    ) async throws -> CodexRecentUsageSnapshot {
         let catalog = await CodexPricingCatalogStore.shared.catalogForScan()
         return try await Task.detached(priority: .utility) {
-            try Self.scanSynchronously(historyDays: historyDays, pricingCatalog: catalog)
+            try Self.scanSynchronously(
+                historyDays: historyDays,
+                pricingCatalog: catalog,
+                progress: progress
+            )
         }.value
     }
 
     private static func scanSynchronously(
         historyDays: Int,
-        pricingCatalog: CodexPricingCatalog?
+        pricingCatalog: CodexPricingCatalog?,
+        progress: (@Sendable (CodexLocalScanCoverage) -> Void)?
     ) throws -> CodexRecentUsageSnapshot {
-        let days = max(1, min(90, historyDays))
+        let days = max(1, min(Self.defaultHistoryDays, historyDays))
         let now = Date()
-        let calendar = Calendar.current
+        let timeZoneIdentifier = TimeZone.current.identifier
+        let calendar = self.stableCalendar(timeZoneIdentifier: timeZoneIdentifier)
         let today = calendar.startOfDay(for: now)
         let startDate = calendar.date(byAdding: .day, value: -(days - 1), to: today) ?? today
         let cacheURL = self.cacheURL()
-        var cache = self.loadCache(cacheURL) ?? ScannerCache(version: self.cacheVersion, files: [:])
-        if cache.version != self.cacheVersion {
-            cache = ScannerCache(version: self.cacheVersion, files: [:])
+        let store = try? SQLiteCacheStore(url: self.sqliteCacheURL())
+        var cache = (try? store?.load(cacheVersion: self.cacheVersion))
+            ?? ScannerCache(version: self.cacheVersion, files: [:])
+        var updatedPaths: Set<String> = []
+        if cache.files.isEmpty,
+           let legacy = self.loadCache(cacheURL),
+           [7, self.cacheVersion].contains(legacy.version)
+        {
+            cache = ScannerCache(version: self.cacheVersion, files: legacy.files)
+            updatedPaths = Set(legacy.files.keys)
         }
 
         let files = self.sessionFiles(modifiedSince: startDate)
         let activePaths = Set(files.map(\.path))
+        let removedPaths = Set(cache.files.keys).subtracting(activePaths)
         cache.files = cache.files.filter { activePaths.contains($0.key) }
 
-        for fileURL in files {
+        progress?(CodexLocalScanCoverage(
+            scannedFiles: 0,
+            totalFiles: files.count,
+            historyDays: days,
+            isComplete: files.isEmpty
+        ))
+
+        for (index, fileURL) in files.enumerated() {
             try Task.checkCancellation()
             let values = try fileURL.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
             let fileSize = Int64(values.fileSize ?? 0)
@@ -203,8 +415,18 @@ struct CodexLocalUsageScanner: Sendable {
             if let old, old.size == fileSize {
                 var unchanged = old
                 unchanged.modifiedAt = modifiedAt
+                let eventCount = unchanged.events.count
                 unchanged.events.removeAll { $0.timestamp < startDate }
                 cache.files[fileURL.path] = unchanged
+                if unchanged.events.count != eventCount {
+                    updatedPaths.insert(fileURL.path)
+                }
+                progress?(CodexLocalScanCoverage(
+                    scannedFiles: index + 1,
+                    totalFiles: files.count,
+                    historyDays: days,
+                    isComplete: index + 1 == files.count
+                ))
                 continue
             }
 
@@ -215,16 +437,39 @@ struct CodexLocalUsageScanner: Sendable {
                 cached: old,
                 startDate: startDate
             )
+            updatedPaths.insert(fileURL.path)
+            progress?(CodexLocalScanCoverage(
+                scannedFiles: index + 1,
+                totalFiles: files.count,
+                historyDays: days,
+                isComplete: index + 1 == files.count
+            ))
         }
 
-        try self.saveCache(cache, to: cacheURL)
+        if let store {
+            try store.apply(
+                cache: cache,
+                updatedPaths: updatedPaths,
+                removedPaths: removedPaths
+            )
+        } else {
+            try self.saveCache(cache, to: cacheURL)
+        }
         return self.aggregate(
             cache: cache,
             startDate: startDate,
             today: today,
             now: now,
             days: days,
-            pricingCatalog: pricingCatalog
+            pricingCatalog: pricingCatalog,
+            calendar: calendar,
+            timeZoneIdentifier: timeZoneIdentifier,
+            scanCoverage: CodexLocalScanCoverage(
+                scannedFiles: files.count,
+                totalFiles: files.count,
+                historyDays: days,
+                isComplete: true
+            )
         )
     }
 
@@ -595,17 +840,29 @@ struct CodexLocalUsageScanner: Sendable {
         today: Date,
         now: Date,
         days: Int,
-        pricingCatalog: CodexPricingCatalog?
+        pricingCatalog: CodexPricingCatalog?,
+        calendar: Calendar,
+        timeZoneIdentifier: String,
+        scanCoverage: CodexLocalScanCoverage
     ) -> CodexRecentUsageSnapshot {
-        let calendar = Calendar.current
         var seenEvents: Set<String> = []
         var uniqueEvents: [TokenEvent] = []
         var byDay: [String: DayAccumulator] = [:]
         var byModel: [String: UsageAccumulator] = [:]
         var byProject: [String: ProjectAccumulator] = [:]
         var bySession: [String: SessionAccumulator] = [:]
+        var byCurrentWeekHour: [String: HourAccumulator] = [:]
+        var byLastYearHour: [String: HourAccumulator] = [:]
         var contextHealth: [CodexContextHealthSnapshot] = []
         let priorityTurns = self.priorityTurnIDs(since: startDate)
+        let detailStartDate = calendar.date(byAdding: .day, value: -29, to: today) ?? today
+        let currentWeekday = calendar.component(.weekday, from: today)
+        let daysSinceMonday = (currentWeekday + 5) % 7
+        let currentWeekStart = calendar.date(
+            byAdding: .day,
+            value: -daysSinceMonday,
+            to: today
+        ) ?? today
 
         for file in cache.files.values {
             let logicalSessionID = file.parentSessionID ?? file.sessionID
@@ -685,7 +942,7 @@ struct CodexLocalUsageScanner: Sendable {
                     isPriority: isPriority,
                     catalog: pricingCatalog
                 )
-                let dayKey = self.dayKey(event.timestamp)
+                let dayKey = self.dayKey(event.timestamp, calendar: calendar)
                 var accumulator = byDay[dayKey] ?? DayAccumulator()
                 accumulator.input += event.input
                 accumulator.cached += event.cached
@@ -698,6 +955,8 @@ struct CodexLocalUsageScanner: Sendable {
                 if let estimate {
                     accumulator.knownCost += estimate.cost
                     accumulator.hasKnownCost = true
+                    accumulator.pricedTokens += event.tokens
+                    accumulator.pricedRequests += 1
                     switch estimate.source {
                     case .dynamic: accumulator.usedDynamicPricing = true
                     case .builtIn, .priority: accumulator.usedBuiltInPricing = true
@@ -705,36 +964,57 @@ struct CodexLocalUsageScanner: Sendable {
                 }
                 byDay[dayKey] = accumulator
 
-                var model = byModel[event.model] ?? UsageAccumulator()
-                model.add(event, isPriority: isPriority, estimatedCost: estimate?.cost)
-                byModel[event.model] = model
+                let hourComponents = calendar.dateComponents(
+                    [.weekday, .hour],
+                    from: event.timestamp
+                )
+                if let weekday = hourComponents.weekday, let hour = hourComponents.hour {
+                    let key = "\(weekday)-\(hour)"
+                    var yearlyHour = byLastYearHour[key] ?? HourAccumulator()
+                    yearlyHour.tokens += event.tokens
+                    yearlyHour.requestCount += 1
+                    byLastYearHour[key] = yearlyHour
 
-                if let path = event.projectPath, !path.isEmpty {
-                    var project = byProject[path] ?? ProjectAccumulator()
-                    project.usage.add(
-                        event,
-                        isPriority: isPriority,
-                        estimatedCost: estimate?.cost
-                    )
-                    if let logicalSessionID = event.logicalSessionID ?? event.sessionID {
-                        project.logicalSessionIDs.insert(logicalSessionID)
+                    if event.timestamp >= currentWeekStart {
+                        var weeklyHour = byCurrentWeekHour[key] ?? HourAccumulator()
+                        weeklyHour.tokens += event.tokens
+                        weeklyHour.requestCount += 1
+                        byCurrentWeekHour[key] = weeklyHour
                     }
-                    project.lastActiveAt = max(project.lastActiveAt, event.timestamp)
-                    byProject[path] = project
                 }
 
-                if let logicalSessionID = event.logicalSessionID ?? event.sessionID {
-                    var session = bySession[logicalSessionID] ?? SessionAccumulator()
-                    session.projectPath = session.projectPath ?? event.projectPath
-                    session.usage.add(
-                        event,
-                        isPriority: isPriority,
-                        estimatedCost: estimate?.cost
-                    )
-                    session.modelTokens[event.model, default: 0] += event.tokens
-                    session.startedAt = min(session.startedAt, event.timestamp)
-                    session.lastActiveAt = max(session.lastActiveAt, event.timestamp)
-                    bySession[logicalSessionID] = session
+                if event.timestamp >= detailStartDate {
+                    var model = byModel[event.model] ?? UsageAccumulator()
+                    model.add(event, isPriority: isPriority, estimate: estimate)
+                    byModel[event.model] = model
+
+                    if let path = event.projectPath, !path.isEmpty {
+                        var project = byProject[path] ?? ProjectAccumulator()
+                        project.usage.add(
+                            event,
+                            isPriority: isPriority,
+                            estimate: estimate
+                        )
+                        if let logicalSessionID = event.logicalSessionID ?? event.sessionID {
+                            project.logicalSessionIDs.insert(logicalSessionID)
+                        }
+                        project.lastActiveAt = max(project.lastActiveAt, event.timestamp)
+                        byProject[path] = project
+                    }
+
+                    if let logicalSessionID = event.logicalSessionID ?? event.sessionID {
+                        var session = bySession[logicalSessionID] ?? SessionAccumulator()
+                        session.projectPath = session.projectPath ?? event.projectPath
+                        session.usage.add(
+                            event,
+                            isPriority: isPriority,
+                            estimate: estimate
+                        )
+                        session.modelTokens[event.model, default: 0] += event.tokens
+                        session.startedAt = min(session.startedAt, event.timestamp)
+                        session.lastActiveAt = max(session.lastActiveAt, event.timestamp)
+                        bySession[logicalSessionID] = session
+                    }
                 }
             }
         }
@@ -742,8 +1022,14 @@ struct CodexLocalUsageScanner: Sendable {
         var daily: [CodexTokenUsageDay] = []
         for offset in 0..<days {
             let date = calendar.date(byAdding: .day, value: offset, to: startDate) ?? startDate
-            let key = self.dayKey(date)
+            let key = self.dayKey(date, calendar: calendar)
             let accumulator = byDay[key] ?? DayAccumulator()
+            let coverage = CodexCostCoverage(
+                pricedTokens: accumulator.pricedTokens,
+                totalTokens: accumulator.totalTokens,
+                pricedRequests: accumulator.pricedRequests,
+                totalRequests: accumulator.requestCount
+            )
             daily.append(CodexTokenUsageDay(
                 dayKey: key,
                 inputTokens: accumulator.input,
@@ -754,11 +1040,19 @@ struct CodexLocalUsageScanner: Sendable {
                 priorityTokens: accumulator.priorityTokens,
                 requestCount: accumulator.requestCount,
                 turnCount: accumulator.turnIDs.count,
-                estimatedCostUSD: accumulator.hasKnownCost ? accumulator.knownCost : nil
+                estimatedCostUSD: accumulator.totalTokens == 0
+                    ? 0
+                    : (accumulator.hasKnownCost ? accumulator.knownCost : nil),
+                costCoverage: coverage,
+                costProvenance: self.costProvenance(
+                    usedDynamic: accumulator.usedDynamicPricing,
+                    usedBuiltIn: accumulator.usedBuiltInPricing,
+                    totalTokens: accumulator.totalTokens
+                )
             ))
         }
 
-        let todayKey = self.dayKey(today)
+        let todayKey = self.dayKey(today, calendar: calendar)
         let todayEntry = daily.first { $0.dayKey == todayKey }
         let last7Days = Array(daily.suffix(7))
         let previous7Days = Array(daily.dropLast(min(7, daily.count)).suffix(7))
@@ -779,6 +1073,11 @@ struct CodexLocalUsageScanner: Sendable {
             last30Days,
             uniqueTurnCount: last30TurnCount
         )
+        let allTimeTurnCount = Set(uniqueEvents.compactMap(\.turnID)).count
+        let allTimeSummary = self.periodSummary(
+            daily,
+            uniqueTurnCount: allTimeTurnCount
+        )
         let usedDynamicPricing = byDay.values.contains { $0.usedDynamicPricing }
         let usedBuiltInPricing = byDay.values.contains { $0.usedBuiltInPricing }
         let topModels = byModel.map { model, usage in
@@ -794,7 +1093,9 @@ struct CodexLocalUsageScanner: Sendable {
                     0,
                     usage.requestCount - usage.priorityRequestCount
                 ),
-                priorityRequestCount: usage.priorityRequestCount
+                priorityRequestCount: usage.priorityRequestCount,
+                costCoverage: usage.costCoverage,
+                costProvenance: usage.costProvenance
             )
         }
         .sorted { lhs, rhs in
@@ -814,7 +1115,9 @@ struct CodexLocalUsageScanner: Sendable {
                 requestCount: project.usage.requestCount,
                 turnCount: project.usage.turnIDs.count,
                 sessionCount: project.logicalSessionIDs.count,
-                lastActiveAt: project.lastActiveAt
+                lastActiveAt: project.lastActiveAt,
+                costCoverage: project.usage.costCoverage,
+                costProvenance: project.usage.costProvenance
             )
         }
         .sorted { lhs, rhs in
@@ -826,7 +1129,9 @@ struct CodexLocalUsageScanner: Sendable {
 
         let recentSessions = bySession.compactMap { sessionID, session
             -> CodexSessionUsageSummary? in
-            guard session.lastActiveAt != .distantPast else { return nil }
+            guard session.lastActiveAt != .distantPast,
+                  session.lastActiveAt >= detailStartDate
+            else { return nil }
             let startedAt = session.startedAt == .distantFuture
                 ? session.lastActiveAt
                 : session.startedAt
@@ -862,7 +1167,9 @@ struct CodexLocalUsageScanner: Sendable {
                 compactionCount: session.compactionCount,
                 isActive: !session.activeTurnIDs.isEmpty
                     && now.timeIntervalSince(session.lastActiveAt)
-                        <= self.activeSessionWindow
+                        <= self.activeSessionWindow,
+                costCoverage: session.usage.costCoverage,
+                costProvenance: session.usage.costProvenance
             )
         }
         .sorted { $0.lastActiveAt > $1.lastActiveAt }
@@ -888,6 +1195,8 @@ struct CodexLocalUsageScanner: Sendable {
             if lhs.isActive != rhs.isActive { return lhs.isActive && !rhs.isActive }
             return lhs.capturedAt > rhs.capturedAt
         }
+        let hourly = self.hourlyBuckets(from: byCurrentWeekHour)
+        let hourlyLastYear = self.hourlyBuckets(from: byLastYearHour)
 
         return CodexRecentUsageSnapshot(
             todayTokens: todayEntry?.totalTokens ?? 0,
@@ -904,12 +1213,41 @@ struct CodexLocalUsageScanner: Sendable {
             updatedAt: now,
             last7DaysSummary: last7DaysSummary,
             last30DaysSummary: last30DaysSummary,
+            allTimeSummary: allTimeSummary,
             comparison: comparison,
             topModels: Array(topModels),
             topProjects: Array(topProjects),
             recentSessions: Array(recentSessions),
-            recentContextHealth: Array(sortedContexts.prefix(self.recentContextLimit))
+            recentContextHealth: Array(sortedContexts.prefix(self.recentContextLimit)),
+            hourly: hourly,
+            hourlyLastYear: hourlyLastYear,
+            historyStart: startDate,
+            historyEnd: now,
+            timeZoneIdentifier: timeZoneIdentifier,
+            scanCoverage: scanCoverage
         )
+    }
+
+    private static func hourlyBuckets(
+        from accumulators: [String: HourAccumulator]
+    ) -> [CodexHourlyUsageBucket] {
+        accumulators.compactMap { key, usage -> CodexHourlyUsageBucket? in
+            let pieces = key.split(separator: "-").compactMap { Int($0) }
+            guard pieces.count == 2 else { return nil }
+            return CodexHourlyUsageBucket(
+                weekday: pieces[0],
+                hour: pieces[1],
+                tokens: usage.tokens,
+                requestCount: usage.requestCount
+            )
+        }
+        .sorted { lhs, rhs in
+            let leftWeekday = (lhs.weekday + 5) % 7
+            let rightWeekday = (rhs.weekday + 5) % 7
+            return leftWeekday == rightWeekday
+                ? lhs.hour < rhs.hour
+                : leftWeekday < rightWeekday
+        }
     }
 
     private static func periodSummary(
@@ -917,6 +1255,8 @@ struct CodexLocalUsageScanner: Sendable {
         uniqueTurnCount: Int? = nil
     ) -> CodexUsagePeriodSummary {
         let knownCosts = daily.compactMap(\.estimatedCostUSD)
+        let coverage = CodexCostCoverage.combining(daily.map(\.costCoverage))
+        let provenances = Set(daily.lazy.filter { $0.totalTokens > 0 }.map(\.costProvenance))
         let peak = daily.max { lhs, rhs in
             if lhs.totalTokens != rhs.totalTokens {
                 return lhs.totalTokens < rhs.totalTokens
@@ -940,7 +1280,9 @@ struct CodexLocalUsageScanner: Sendable {
             turnCount: uniqueTurnCount ?? daily.reduce(0) { $0 + $1.turnCount },
             activeDays: daily.lazy.filter { $0.totalTokens > 0 }.count,
             peakDayKey: peak?.totalTokens == 0 ? nil : peak?.dayKey,
-            peakDayTokens: peak?.totalTokens ?? 0
+            peakDayTokens: peak?.totalTokens ?? 0,
+            costCoverage: coverage,
+            costProvenance: self.combinedProvenance(provenances)
         )
     }
 
@@ -1056,6 +1398,11 @@ struct CodexLocalUsageScanner: Sendable {
             .appendingPathComponent("local-token-cache.json", isDirectory: false)
     }
 
+    private static func sqliteCacheURL() -> URL {
+        cacheURL().deletingLastPathComponent()
+            .appendingPathComponent("local-token-cache.sqlite", isDirectory: false)
+    }
+
     private static func loadCache(_ url: URL) -> ScannerCache? {
         guard let data = try? Data(contentsOf: url) else { return nil }
         return try? JSONDecoder().decode(ScannerCache.self, from: data)
@@ -1120,12 +1467,40 @@ struct CodexLocalUsageScanner: Sendable {
         return fractional.date(from: raw) ?? ISO8601DateFormatter().date(from: raw)
     }
 
-    private static func dayKey(_ date: Date) -> String {
+    private static func stableCalendar(timeZoneIdentifier: String) -> Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.locale = Locale(identifier: "en_US_POSIX")
+        calendar.timeZone = TimeZone(identifier: timeZoneIdentifier) ?? .current
+        return calendar
+    }
+
+    private static func dayKey(_ date: Date, calendar: Calendar) -> String {
         let formatter = DateFormatter()
-        formatter.calendar = .current
+        formatter.calendar = calendar
+        formatter.timeZone = calendar.timeZone
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "yyyy-MM-dd"
         return formatter.string(from: date)
+    }
+
+    private static func costProvenance(
+        usedDynamic: Bool,
+        usedBuiltIn: Bool,
+        totalTokens: Int
+    ) -> CodexCostProvenance {
+        guard totalTokens > 0 else { return .unknown }
+        if usedDynamic, usedBuiltIn { return .mixed }
+        if usedDynamic { return .modelsDev }
+        if usedBuiltIn { return .builtIn }
+        return .unknown
+    }
+
+    private static func combinedProvenance(
+        _ values: Set<CodexCostProvenance>
+    ) -> CodexCostProvenance {
+        let priced = values.subtracting([.unknown])
+        guard !priced.isEmpty else { return .unknown }
+        return priced.count == 1 ? priced.first! : .mixed
     }
 
     private static func normalizeModel(_ raw: String) -> String {

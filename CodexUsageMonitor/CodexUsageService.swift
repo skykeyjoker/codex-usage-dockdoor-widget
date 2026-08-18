@@ -46,23 +46,16 @@ struct CodexUsageService {
 
         var allowsCLIFallback: Bool {
             switch self {
-            case .authMissing, .authTokensMissing, .loginExpired: return true
-            case .authInvalid, .invalidResponse, .server: return false
+            case .authMissing, .authTokensMissing, .authInvalid, .loginExpired: return true
+            case .invalidResponse, .server: return false
             }
         }
     }
 
     private struct Credentials {
         let accessToken: String
-        let refreshToken: String
         let idToken: String?
         let accountId: String?
-        let lastRefresh: Date?
-
-        var needsRefresh: Bool {
-            guard let lastRefresh else { return true }
-            return Date().timeIntervalSince(lastRefresh) > 8 * 24 * 60 * 60
-        }
     }
 
     private struct UsageResponse: Decodable {
@@ -141,6 +134,51 @@ struct CodexUsageService {
             } else {
                 balance = nil
             }
+        }
+    }
+
+    private struct MonthlyUsageResponse: Decodable {
+        let currentMonthUsage: Double?
+        let effectiveMonthlyLimit: EffectiveMonthlyLimit?
+
+        enum CodingKeys: String, CodingKey {
+            case currentMonthUsage = "current_month_usage"
+            case effectiveMonthlyLimit = "effective_monthly_limit"
+        }
+
+        struct EffectiveMonthlyLimit: Decodable {
+            let limit: Double?
+            let enforcementMode: String?
+
+            enum CodingKeys: String, CodingKey {
+                case limit
+                case enforcementMode = "enforcement_mode"
+            }
+
+            init(from decoder: Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                limit = MonthlyUsageResponse.flexibleDouble(container, key: .limit)
+                enforcementMode = try? container.decodeIfPresent(String.self, forKey: .enforcementMode)
+            }
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            currentMonthUsage = Self.flexibleDouble(container, key: .currentMonthUsage)
+            effectiveMonthlyLimit = try? container.decodeIfPresent(
+                EffectiveMonthlyLimit.self,
+                forKey: .effectiveMonthlyLimit
+            )
+        }
+
+        private static func flexibleDouble<Key: CodingKey>(
+            _ container: KeyedDecodingContainer<Key>,
+            key: Key
+        ) -> Double? {
+            if let value = try? container.decodeIfPresent(Double.self, forKey: key) { return value }
+            if let value = try? container.decodeIfPresent(Int.self, forKey: key) { return Double(value) }
+            if let value = try? container.decodeIfPresent(String.self, forKey: key) { return Double(value) }
+            return nil
         }
     }
 
@@ -260,20 +298,11 @@ struct CodexUsageService {
     }
 
     private func fetchOAuthUsage() async throws -> CodexUsageSnapshot {
-        var credentials = try loadCredentials()
-        if credentials.needsRefresh, !credentials.refreshToken.isEmpty {
-            credentials = try await refresh(credentials)
-            try save(credentials)
-        }
-
-        let response: UsageResponse
-        do {
-            response = try await requestUsage(credentials)
-        } catch ServiceError.loginExpired where !credentials.refreshToken.isEmpty {
-            credentials = try await refresh(credentials)
-            try save(credentials)
-            response = try await requestUsage(credentials)
-        }
+        // Codex owns auth.json and its refresh-token chain. The widget is a
+        // read-only consumer: stale OAuth credentials fall back to CLI RPC in
+        // Automatic mode instead of mutating the CLI's credential file.
+        let credentials = try loadCredentials()
+        let response = try await requestUsage(credentials)
 
         let identity = identity(from: credentials.idToken)
         let accountId = credentials.accountId ?? identity.accountId
@@ -281,6 +310,11 @@ struct CodexUsageService {
         async let resetCreditTask = fetchResetCredits(
             accessToken: accessToken,
             accountId: accountId
+        )
+        async let monthlyCreditTask = fetchMonthlyCreditLimitIfNeeded(
+            accessToken: accessToken,
+            accountId: accountId,
+            plan: response.planType ?? identity.plan
         )
 
         let mainWindows = [
@@ -296,12 +330,21 @@ struct CodexUsageService {
             ),
         ].compactMap { $0 }
 
-        let weekly = mainWindows
-            .filter { $0.durationSeconds >= 2 * 24 * 60 * 60 }
+        let monthly = mainWindows
+            .filter { $0.durationSeconds >= 21 * 24 * 60 * 60 }
             .max { $0.durationSeconds < $1.durationSeconds }
+            .map { relabeledWindow($0, id: "monthly", title: CodexLocalization.text("月度", "Monthly")) }
+        let weekly = mainWindows
+            .filter {
+                $0.durationSeconds >= 2 * 24 * 60 * 60
+                    && $0.durationSeconds < 21 * 24 * 60 * 60
+            }
+            .max { $0.durationSeconds < $1.durationSeconds }
+            .map { relabeledWindow($0, id: "weekly", title: CodexLocalization.text("每周", "Weekly")) }
         let session = mainWindows
             .filter { $0.durationSeconds < 2 * 24 * 60 * 60 }
             .min { $0.durationSeconds < $1.durationSeconds }
+            .map { relabeledWindow($0, id: "session", title: CodexLocalization.text("短周期", "Session")) }
 
         var extras: [CodexQuotaWindow] = []
         for (index, limit) in (response.additionalRateLimits ?? []).enumerated() {
@@ -319,11 +362,23 @@ struct CodexUsageService {
         }
 
         let resetCredits = try? await resetCreditTask
+        let monthlyCredit = try? await monthlyCreditTask
+        let monthlyCreditWindow = monthlyCredit.map {
+            CodexQuotaWindow(
+                id: "monthly-credit",
+                title: CodexLocalization.text("月度额度", "Monthly quota"),
+                usedPercent: max(0, min(100, 100 - $0.remainingPercent)),
+                resetAt: nil,
+                durationSeconds: 30 * 24 * 60 * 60
+            )
+        }
         return CodexUsageSnapshot(
             accountEmail: identity.email,
             plan: response.planType ?? identity.plan,
             sessionWindow: session,
-            weeklyWindow: weekly ?? mainWindows.max { $0.durationSeconds < $1.durationSeconds },
+            weeklyWindow: weekly,
+            monthlyWindow: monthly ?? monthlyCreditWindow,
+            monthlyCreditLimit: monthlyCredit,
             extraWindows: extras,
             creditsBalance: response.credits?.balance,
             resetCreditsAvailable: resetCredits?.availableCount,
@@ -437,6 +492,46 @@ struct CodexUsageService {
         )
     }
 
+    private func fetchMonthlyCreditLimitIfNeeded(
+        accessToken: String,
+        accountId: String?,
+        plan: String?
+    ) async throws -> CodexMonthlyCreditLimit? {
+        let eligiblePlans = ["team", "business", "education", "enterprise", "edu", "k12", "quorum"]
+        guard let accountId, !accountId.isEmpty,
+              let plan = plan?.lowercased(),
+              eligiblePlans.contains(where: { plan.contains($0) })
+        else { return nil }
+
+        var allowed = CharacterSet.urlPathAllowed
+        allowed.subtract(CharacterSet(charactersIn: "/?#%"))
+        guard let encodedAccount = accountId.addingPercentEncoding(withAllowedCharacters: allowed),
+              let url = URL(string:
+                "https://chatgpt.com/backend-api/accounts/\(encodedAccount)/spend-controls/current-user/monthly-usage")
+        else { return nil }
+
+        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 8)
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("codex-1", forHTTPHeaderField: "OpenAI-Beta")
+        request.setValue("Codex Desktop", forHTTPHeaderField: "originator")
+        request.setValue(accountId, forHTTPHeaderField: "ChatGPT-Account-Id")
+        let data = try await authorizedData(request)
+        let response = try JSONDecoder().decode(MonthlyUsageResponse.self, from: data)
+        guard let limit = response.effectiveMonthlyLimit?.limit, limit > 0 else { return nil }
+        if let mode = response.effectiveMonthlyLimit?.enforcementMode?.lowercased(),
+           ["none", "off", "disabled", "no_limit"].contains(mode)
+        {
+            return nil
+        }
+        let used = max(0, response.currentMonthUsage ?? 0)
+        return CodexMonthlyCreditLimit(
+            used: used,
+            limit: limit,
+            remainingPercent: max(0, min(100, 100 - used / limit * 100))
+        )
+    }
+
     private func authorizedData(_ request: URLRequest) async throws -> Data {
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw ServiceError.invalidResponse }
@@ -472,6 +567,20 @@ struct CodexUsageService {
         )
     }
 
+    private func relabeledWindow(
+        _ window: CodexQuotaWindow,
+        id: String,
+        title: String
+    ) -> CodexQuotaWindow {
+        CodexQuotaWindow(
+            id: id,
+            title: title,
+            usedPercent: window.usedPercent,
+            resetAt: window.resetAt,
+            durationSeconds: window.durationSeconds
+        )
+    }
+
     private func authFileURL() -> URL {
         let env = ProcessInfo.processInfo.environment
         if let configured = env["CODEX_HOME"]?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -497,71 +606,13 @@ struct CodexUsageService {
               !access.isEmpty
         else { throw ServiceError.authTokensMissing }
 
-        let refresh = (tokens["refresh_token"] ?? tokens["refreshToken"]) as? String ?? ""
         let idToken = (tokens["id_token"] ?? tokens["idToken"]) as? String
         let accountId = (tokens["account_id"] ?? tokens["accountId"]) as? String
-        let lastRefresh = (json["last_refresh"] as? String).flatMap(parseISO8601)
         return Credentials(
             accessToken: access,
-            refreshToken: refresh,
             idToken: idToken,
-            accountId: accountId,
-            lastRefresh: lastRefresh
+            accountId: accountId
         )
-    }
-
-    private func refresh(_ credentials: Credentials) async throws -> Credentials {
-        guard !credentials.refreshToken.isEmpty else { throw ServiceError.loginExpired }
-        var request = URLRequest(
-            url: URL(string: "https://auth.openai.com/oauth/token")!,
-            cachePolicy: .reloadIgnoringLocalCacheData,
-            timeoutInterval: 30
-        )
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONSerialization.data(withJSONObject: [
-            "client_id": "app_EMoamEEZ73f0CkXaXp7hrann",
-            "grant_type": "refresh_token",
-            "refresh_token": credentials.refreshToken,
-            "scope": "openid profile email",
-        ])
-
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse else { throw ServiceError.invalidResponse }
-        switch http.statusCode {
-        case 200...299: break
-        case 400, 401, 403: throw ServiceError.loginExpired
-        default: throw ServiceError.server(http.statusCode)
-        }
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              json["access_token"] is String
-        else { throw ServiceError.invalidResponse }
-
-        return Credentials(
-            accessToken: json["access_token"] as? String ?? credentials.accessToken,
-            refreshToken: json["refresh_token"] as? String ?? credentials.refreshToken,
-            idToken: json["id_token"] as? String ?? credentials.idToken,
-            accountId: credentials.accountId,
-            lastRefresh: Date()
-        )
-    }
-
-    private func save(_ credentials: Credentials) throws {
-        let url = authFileURL()
-        let data = try Data(contentsOf: url)
-        guard var json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw ServiceError.authInvalid
-        }
-        var tokens = json["tokens"] as? [String: Any] ?? [:]
-        tokens["access_token"] = credentials.accessToken
-        tokens["refresh_token"] = credentials.refreshToken
-        if let idToken = credentials.idToken { tokens["id_token"] = idToken }
-        if let accountId = credentials.accountId { tokens["account_id"] = accountId }
-        json["tokens"] = tokens
-        json["last_refresh"] = ISO8601DateFormatter().string(from: Date())
-        let output = try JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys])
-        try output.write(to: url, options: .atomic)
-        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
     }
 
     private func identity(from idToken: String?) -> (email: String?, plan: String?, accountId: String?) {

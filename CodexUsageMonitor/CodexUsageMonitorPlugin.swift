@@ -60,6 +60,15 @@ final class CodexUsageMonitorPlugin: WidgetPlugin, DockDoorWidgetProvider {
                 options: CodexTokenFormat.allCases.map(\.title),
                 defaultValue: CodexTokenFormat.automatic.title
             ),
+            .picker(
+                key: "hourlyActivityRange",
+                label: CodexLocalization.text(
+                    "小时活跃度范围",
+                    "Hourly Activity Range"
+                ),
+                options: CodexHourlyActivityRange.allCases.map(\.title),
+                defaultValue: CodexHourlyActivityRange.currentWeek.title
+            ),
             .toggle(
                 key: "showQuickLaunchBar",
                 label: CodexLocalization.text("Panel 显示快捷启动栏", "Show Quick Launch Bar in Panel"),
@@ -92,6 +101,14 @@ final class CodexUsageMonitorPlugin: WidgetPlugin, DockDoorWidgetProvider {
             .toggle(
                 key: "showStatus",
                 label: CodexLocalization.text("Dock 显示服务状态", "Show Service Status in Dock"),
+                defaultValue: true
+            ),
+            .toggle(
+                key: "checkReleaseUpdates",
+                label: CodexLocalization.text(
+                    "检查 GitHub Release 更新",
+                    "Check GitHub release updates"
+                ),
                 defaultValue: true
             ),
         ]
@@ -127,6 +144,12 @@ final class CodexUsageMonitorPlugin: WidgetPlugin, DockDoorWidgetProvider {
         if let value = defaults.string(forKey: prefix + "tokenFormat") {
             let normalized = CodexTokenFormat.resolve(title: value).title
             if value != normalized { defaults.set(normalized, forKey: prefix + "tokenFormat") }
+        }
+        if let value = defaults.string(forKey: prefix + "hourlyActivityRange") {
+            let normalized = CodexHourlyActivityRange.resolve(title: value).title
+            if value != normalized {
+                defaults.set(normalized, forKey: prefix + "hourlyActivityRange")
+            }
         }
         if let value = defaults.string(forKey: prefix + "preferredTerminal") {
             let normalized = CodexTerminalApplication.resolve(title: value).title

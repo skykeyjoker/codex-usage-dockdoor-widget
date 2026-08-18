@@ -27,11 +27,13 @@ struct CodexUsageMonitorPanel: View {
     @State private var quotaUsageSource = CodexQuotaUsageSource.automatic
     @State private var refreshInterval = CodexRefreshInterval.fiveMinutes
     @State private var tokenFormat = CodexTokenFormat.automatic
+    @State private var hourlyActivityRange = CodexHourlyActivityRange.currentWeek
     @State private var showStatus = true
     @State private var showQuickLaunchBar = true
     @State private var showCodexLaunch = true
     @State private var showGPTClassicLaunch = true
     @State private var showCLILaunch = true
+    @State private var checkReleaseUpdates = true
     @State private var preferredTerminal = CodexTerminalApplication.automatic
     @State private var panelCardConfiguration = CodexPanelCardConfiguration.full
     @State private var isPanelPageVisibilityExpanded = true
@@ -70,6 +72,13 @@ struct CodexUsageMonitorPanel: View {
     }()
     #else
     @State private var hoveredHeaderPage: CodexPanelPage?
+    #endif
+    #if CODEX_USAGE_TESTING
+    @State private var isReleaseUpdateHovered = UserDefaults.standard.bool(
+        forKey: "codexUsage.testing.hoveredReleaseUpdate"
+    )
+    #else
+    @State private var isReleaseUpdateHovered = false
     #endif
     #if CODEX_USAGE_TESTING
     @State private var appeared = true
@@ -197,6 +206,10 @@ struct CodexUsageMonitorPanel: View {
 
             Spacer(minLength: 3)
 
+            if let update = monitor.releaseUpdate, update.isUpdateAvailable {
+                releaseUpdateHeaderButton(update)
+            }
+
             if monitor.isRefreshing || monitor.isRefreshingConversations {
                 ProgressView().controlSize(.mini)
             } else if showStatus || page == .status {
@@ -227,6 +240,53 @@ struct CodexUsageMonitorPanel: View {
                 endPoint: .bottom
             )
         )
+    }
+
+    private func releaseUpdateHeaderButton(
+        _ update: CodexReleaseUpdateSnapshot
+    ) -> some View {
+        let accent = CodexPalette.orange(for: appearance)
+        let help = CodexLocalization.text(
+            "发现新版本 v\(update.latestVersion)，点击查看 GitHub Release",
+            "Version v\(update.latestVersion) is available. Open the GitHub release"
+        )
+
+        return Button {
+            open(update.releaseURLString)
+        } label: {
+            HStack(spacing: 5) {
+                Circle()
+                    .fill(accent)
+                    .frame(width: 7, height: 7)
+                Text(CodexLocalization.text("有更新", "Update"))
+                    .font(.system(size: 9, weight: .semibold))
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background(
+                accent.opacity(isReleaseUpdateHovered ? 0.16 : 0.10),
+                in: Capsule()
+            )
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(accent)
+        .scaleEffect(isReleaseUpdateHovered ? 1.04 : 1)
+        .offset(y: isReleaseUpdateHovered ? -1 : 0)
+        .shadow(color: accent.opacity(isReleaseUpdateHovered ? 0.28 : 0.10), radius: 5, y: 2)
+        .overlay(alignment: .bottom) {
+            if isReleaseUpdateHovered {
+                CodexHeaderTabTip(text: help, accent: accent)
+                    .offset(y: 28)
+                    .transition(.opacity.combined(with: .scale(scale: 0.90, anchor: .top)))
+            }
+        }
+        .zIndex(isReleaseUpdateHovered ? 32 : 0)
+        .onHover { hovering in
+            withAnimation(.spring(response: 0.22, dampingFraction: 0.72)) {
+                isReleaseUpdateHovered = hovering
+            }
+        }
+        .accessibilityLabel(help)
     }
 
     private func headerButton(
@@ -399,7 +459,8 @@ struct CodexUsageMonitorPanel: View {
                         primary: theme.primary,
                         secondary: theme.secondary,
                         tokenFormat: tokenFormat,
-                        cardOrder: panelCardConfiguration.visibleCards(in: .localInsights)
+                        cardOrder: panelCardConfiguration.visibleCards(in: .localInsights),
+                        hourlyActivityRange: hourlyActivityRange
                     )
                 } else if let error = monitor.tokenUsageError {
                     errorCard(error)
@@ -601,7 +662,28 @@ struct CodexUsageMonitorPanel: View {
     @ViewBuilder
     private func quotaPaceLine(_ window: CodexQuotaWindow) -> some View {
         if let pace = monitor.quotaPace?.insight(id: window.id) {
+            let recentRate = pace.cycleAveragePercentPerHour != nil
+                ? pace.recentPercentPerHour
+                : (pace.sampleCount >= 2 ? pace.percentPerHour : nil)
+            let cycleAverageRate = pace.cycleAveragePercentPerHour
+                ?? inferredCycleAverageRate(pace: pace, window: window)
             let rateText: String = {
+                if let recentRate,
+                   abs(recentRate) < 0.0001,
+                   let cycleAverageRate,
+                   cycleAverageRate > 0
+                {
+                    if window.durationSeconds >= 2 * 24 * 60 * 60 {
+                        return CodexLocalization.text(
+                            String(format: "近期无消耗 · 周期约 %.1f%%/天", cycleAverageRate * 24),
+                            String(format: "No recent use · cycle ~%.1f%%/day", cycleAverageRate * 24)
+                        )
+                    }
+                    return CodexLocalization.text(
+                        String(format: "近期无消耗 · 周期约 %.1f%%/小时", cycleAverageRate),
+                        String(format: "No recent use · cycle ~%.1f%%/hour", cycleAverageRate)
+                    )
+                }
                 guard let hourly = pace.percentPerHour else {
                     return CodexLocalization.text("正在学习额度节奏", "Learning quota pace")
                 }
@@ -670,12 +752,69 @@ struct CodexUsageMonitorPanel: View {
             }
             .font(.system(size: 8.5, weight: .medium))
             .foregroundStyle(.secondary)
-            .help(status.2)
+            .modifier(CodexPaceHoverTip(
+                text: paceHelpText(
+                    status: status.2,
+                    recentRate: recentRate,
+                    cycleAverageRate: cycleAverageRate,
+                    window: window
+                ),
+                accent: status.1
+            ))
         }
+    }
+
+    private func inferredCycleAverageRate(
+        pace: CodexQuotaPaceInsight,
+        window: CodexQuotaWindow,
+        now: Date = Date()
+    ) -> Double? {
+        guard let resetAt = pace.resetAt ?? window.resetAt,
+              let expected = pace.expectedUsedPercent,
+              expected > 0,
+              expected < 100,
+              pace.usedPercent > 0
+        else { return nil }
+        let remaining = max(0, resetAt.timeIntervalSince(now))
+        let elapsedRatio = expected / 100
+        let duration = remaining / max(0.0001, 1 - elapsedRatio)
+        let elapsedHours = duration * elapsedRatio / 3_600
+        guard elapsedHours > 0 else { return nil }
+        return pace.usedPercent / elapsedHours
+    }
+
+    private func paceHelpText(
+        status: String,
+        recentRate: Double?,
+        cycleAverageRate: Double?,
+        window: CodexQuotaWindow
+    ) -> String {
+        let unitIsDaily = window.durationSeconds >= 2 * 24 * 60 * 60
+        let multiplier = unitIsDaily ? 24.0 : 1.0
+        let unit = unitIsDaily
+            ? CodexLocalization.text("天", "day")
+            : CodexLocalization.text("小时", "hour")
+        var lines = [status]
+        if let recentRate {
+            lines.append(abs(recentRate) < 0.0001
+                ? CodexLocalization.text("近期采样：没有新增消耗", "Recent sample: no additional usage")
+                : CodexLocalization.text(
+                    String(format: "近期速度：%.1f%%/%@", recentRate * multiplier, unit),
+                    String(format: "Recent pace: %.1f%%/%@", recentRate * multiplier, unit)
+                ))
+        }
+        if let cycleAverageRate {
+            lines.append(CodexLocalization.text(
+                String(format: "周期平均：约 %.1f%%/%@", cycleAverageRate * multiplier, unit),
+                String(format: "Cycle average: ~%.1f%%/%@", cycleAverageRate * multiplier, unit)
+            ))
+        }
+        return lines.joined(separator: "\n")
     }
 
     private func recentTokenUsageCard(_ snapshot: CodexRecentUsageSnapshot) -> some View {
         let chartDays = snapshot.chartDays
+        let todayCoverage = chartDays.last?.costCoverage ?? .empty
         let chartValues = chartDays.map {
             $0.estimatedCostUSD ?? Double($0.totalTokens) / 1_000_000
         }
@@ -686,7 +825,7 @@ struct CodexUsageMonitorPanel: View {
             HStack {
                 codexSectionLabel(CodexLocalization.text("最近 TOKEN 使用", "RECENT TOKEN USAGE"))
                 Spacer()
-                Text(CodexLocalization.text("API 等价估算", "API-equivalent estimate"))
+                Text(recentUsageCoverageLabel(snapshot.last30DaysSummary.costCoverage))
                     .font(.system(size: 8, weight: .semibold))
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 6)
@@ -698,13 +837,15 @@ struct CodexUsageMonitorPanel: View {
                 recentMetric(
                     title: CodexLocalization.text("今日", "Today"),
                     cost: snapshot.todayEstimatedCostUSD,
-                    tokens: snapshot.todayTokens
+                    tokens: snapshot.todayTokens,
+                    coverage: todayCoverage
                 )
                 Spacer(minLength: 18)
                 recentMetric(
                     title: CodexLocalization.text("近 30 天", "Last 30 days"),
                     cost: snapshot.last30DaysEstimatedCostUSD,
-                    tokens: snapshot.last30DaysTokens
+                    tokens: snapshot.last30DaysTokens,
+                    coverage: snapshot.last30DaysSummary.costCoverage
                 )
             }
 
@@ -844,13 +985,14 @@ struct CodexUsageMonitorPanel: View {
     private func recentMetric(
         title: String,
         cost: Double?,
-        tokens: Int
+        tokens: Int,
+        coverage: CodexCostCoverage
     ) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(title)
                 .font(.system(size: 9, weight: .medium))
                 .foregroundStyle(.secondary)
-            Text(cost.map(formatUSD) ?? "—")
+            Text(formatEstimatedUSD(cost, coverage: coverage))
                 .font(CodexTypography.tokenNumber(size: 15, weight: .bold))
             Text("\(formatTokenCount(tokens)) API tokens")
                 .font(CodexTypography.tokenNumber(size: 10, weight: .semibold))
@@ -883,10 +1025,17 @@ struct CodexUsageMonitorPanel: View {
                     .font(CodexTypography.tokenNumber(size: 7.5, weight: .semibold))
                     .foregroundStyle(theme.secondary)
             }
-            Text(day.estimatedCostUSD.map(formatUSD)
-                ?? CodexLocalization.text("费用未知", "Cost unavailable"))
+            Text(formatEstimatedUSD(day.estimatedCostUSD, coverage: day.costCoverage))
                 .font(CodexTypography.tokenNumber(size: 8, weight: .semibold))
                 .foregroundStyle(theme.primary)
+            if let coverage = day.costCoverage.tokenPercent, !day.costCoverage.isComplete {
+                Text(CodexLocalization.text(
+                    "费用覆盖 \(Int(coverage.rounded()))%",
+                    "Cost coverage \(Int(coverage.rounded()))%"
+                ))
+                    .font(CodexTypography.tokenNumber(size: 7.2, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
         }
         .padding(.horizontal, 7)
         .padding(.vertical, 5)
@@ -968,24 +1117,32 @@ struct CodexUsageMonitorPanel: View {
         let formatter = DateFormatter()
         formatter.calendar = Calendar(identifier: .gregorian)
         formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = .current
+        formatter.timeZone = monitor.recentUsage.flatMap {
+            TimeZone(identifier: $0.timeZoneIdentifier)
+        } ?? .current
         formatter.dateFormat = "yyyy-MM-dd"
         return formatter.date(from: dayKey)
     }
 
     private var recentTokenUsageLoadingCard: some View {
         HStack(spacing: 9) {
-            ProgressView().controlSize(.mini)
+            if let progress = monitor.localScanProgress,
+               progress.totalFiles > 0,
+               !progress.isComplete
+            {
+                ProgressView(value: progress.fraction)
+                    .progressViewStyle(.circular)
+                    .controlSize(.mini)
+            } else {
+                ProgressView().controlSize(.mini)
+            }
             VStack(alignment: .leading, spacing: 2) {
                 Text(CodexLocalization.text(
                     "正在统计最近 Token 使用",
                     "Calculating recent Token usage"
                 ))
                     .font(.system(size: 10, weight: .semibold))
-                Text(CodexLocalization.text(
-                    "首次扫描可能需要几秒，之后只读取新增会话记录。",
-                    "The initial scan may take a few seconds; later scans read only new session records."
-                ))
+                Text(localScanProgressDescription)
                     .font(.system(size: 8.5))
                     .foregroundStyle(.secondary)
             }
@@ -1013,6 +1170,15 @@ struct CodexUsageMonitorPanel: View {
                     value: usage.creditsBalance.map { $0.formatted(.number.precision(.fractionLength(0...2))) } ?? "—",
                     symbol: "creditcard.fill",
                     color: theme.secondary
+                )
+            }
+            if let monthly = usage.monthlyCreditLimit {
+                metricTile(
+                    title: CodexLocalization.text("月度额度", "Monthly quota"),
+                    value: "\(monthly.used.formatted(.number.precision(.fractionLength(0...2)))) / \(monthly.limit.formatted(.number.precision(.fractionLength(0...2))))",
+                    symbol: "calendar.badge.clock",
+                    color: theme.primary,
+                    trailingDetail: "\(Int(monthly.remainingPercent.rounded()))%"
                 )
             }
         }
@@ -1282,7 +1448,7 @@ struct CodexUsageMonitorPanel: View {
                     Text(formatTokenCount(project.tokens))
                         .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
                     if let cost = project.estimatedCostUSD {
-                        Text(formatUSD(cost))
+                        Text(formatEstimatedUSD(cost, coverage: project.costCoverage ?? .empty))
                             .font(.system(size: 7.5, weight: .medium, design: .monospaced))
                             .foregroundStyle(.secondary)
                     }
@@ -1334,7 +1500,10 @@ struct CodexUsageMonitorPanel: View {
                 workMetric("Token", formatTokenCount(project.tokens), symbol: "sum")
                 workMetric(
                     CodexLocalization.text("费用", "Cost"),
-                    project.estimatedCostUSD.map(formatUSD) ?? "—",
+                    formatEstimatedUSD(
+                        project.estimatedCostUSD,
+                        coverage: project.costCoverage ?? .empty
+                    ),
                     symbol: "dollarsign"
                 )
                 workMetric(
@@ -1388,8 +1557,8 @@ struct CodexUsageMonitorPanel: View {
     private func dataScopeFootnote(_ snapshot: CodexRecentUsageSnapshot) -> some View {
         Label {
             Text(CodexLocalization.text(
-                "只读扫描 ~/.codex · \(snapshot.recentSessions.count) 个近期会话 · 更新于 \(snapshot.updatedAt.formatted(date: .omitted, time: .shortened))",
-                "Read-only ~/.codex scan · \(snapshot.recentSessions.count) recent sessions · updated \(snapshot.updatedAt.formatted(date: .omitted, time: .shortened))"
+                "只读扫描 ~/.codex · \(snapshot.scanCoverage.historyDays) 天 · \(snapshot.recentSessions.count) 个近期会话 · 更新于 \(snapshot.updatedAt.formatted(date: .omitted, time: .shortened))",
+                "Read-only ~/.codex scan · \(snapshot.scanCoverage.historyDays) days · \(snapshot.recentSessions.count) recent sessions · updated \(snapshot.updatedAt.formatted(date: .omitted, time: .shortened))"
             ))
         } icon: {
             Image(systemName: "lock.shield")
@@ -1695,6 +1864,15 @@ struct CodexUsageMonitorPanel: View {
                     hoverEfficiencyMetric(
                         CodexLocalization.text("中止", "Aborted"),
                         session.map { "\($0.abortedTurnCount)" } ?? "—"
+                    )
+                    hoverEfficiencyMetric(
+                        CodexLocalization.text("费用", "Cost"),
+                        session.map {
+                            formatEstimatedUSD(
+                                $0.estimatedCostUSD,
+                                coverage: $0.costCoverage ?? .empty
+                            )
+                        } ?? "—"
                     )
                 }
             }
@@ -2122,6 +2300,15 @@ struct CodexUsageMonitorPanel: View {
 
     private var settingsPage: some View {
         VStack(alignment: .leading, spacing: 14) {
+            #if CODEX_USAGE_TESTING
+            if UserDefaults.standard.bool(forKey: "codexUsage.testing.releaseUpdatesFirst") {
+                releaseUpdatesSettingsSection
+            }
+            if UserDefaults.standard.bool(forKey: "codexUsage.testing.projectInfoFirst") {
+                projectAndAuthorSettingsSection
+            }
+            #endif
+
             settingsSection(CodexLocalization.text("DOCK 展示", "DOCK DISPLAY")) {
                 settingPicker(CodexLocalization.text("主额度", "Primary quota"), selection: $displayLimit) {
                     ForEach(CodexDisplayLimit.allCases) { Text($0.title).tag($0) }
@@ -2175,6 +2362,18 @@ struct CodexUsageMonitorPanel: View {
                 }
                 .onChange(of: tokenFormat) { _, value in
                     monitor.writeSetting(value.title, key: "tokenFormat")
+                }
+                CodexGlassDivider()
+                settingPicker(
+                    CodexLocalization.text("小时活跃度范围", "Hourly activity range"),
+                    selection: $hourlyActivityRange
+                ) {
+                    ForEach(CodexHourlyActivityRange.allCases) { range in
+                        Text(range.title).tag(range)
+                    }
+                }
+                .onChange(of: hourlyActivityRange) { _, value in
+                    monitor.writeSetting(value.title, key: "hourlyActivityRange")
                 }
             }
 
@@ -2296,6 +2495,14 @@ struct CodexUsageMonitorPanel: View {
                 .disabled(monitor.isRefreshing)
             }
 
+            #if CODEX_USAGE_TESTING
+            if !UserDefaults.standard.bool(forKey: "codexUsage.testing.releaseUpdatesFirst") {
+                releaseUpdatesSettingsSection
+            }
+            #else
+            releaseUpdatesSettingsSection
+            #endif
+
             settingsSection(CodexLocalization.text("账户与链接", "ACCOUNT & LINKS")) {
                 Button { open("https://chatgpt.com/codex/settings/usage") } label: {
                     settingActionRow(
@@ -2338,7 +2545,257 @@ struct CodexUsageMonitorPanel: View {
                 .font(.system(size: 8.5))
                 .foregroundStyle(.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
+
+            #if CODEX_USAGE_TESTING
+            if !UserDefaults.standard.bool(forKey: "codexUsage.testing.projectInfoFirst") {
+                projectAndAuthorSettingsSection
+            }
+            #else
+            projectAndAuthorSettingsSection
+            #endif
         }
+    }
+
+    private var projectAndAuthorSettingsSection: some View {
+        settingsSection(CodexLocalization.text("项目与作者", "PROJECT & AUTHOR")) {
+            Button {
+                open(CodexReleaseUpdateService.repositoryURL)
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "link")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(theme.primary)
+                        .frame(width: 16)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(CodexLocalization.text("项目地址", "Project"))
+                            .font(.system(size: 10.5, weight: .medium))
+                        Text("github.com/skykeyjoker/codex-usage-dockdoor-widget")
+                            .font(.system(size: 8, weight: .medium, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    Spacer(minLength: 4)
+                    Image(systemName: "arrow.up.right")
+                        .font(.system(size: 8, weight: .semibold))
+                        .foregroundStyle(.tertiary)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(CodexLocalization.text("打开 GitHub 项目", "Open the GitHub project"))
+
+            CodexGlassDivider()
+            HStack(spacing: 8) {
+                Image(systemName: "person.fill")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(theme.primary)
+                    .frame(width: 16)
+                Text(CodexLocalization.text("作者", "Author"))
+                    .font(.system(size: 10.5, weight: .medium))
+                Spacer()
+                Text("Skykey")
+                    .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+
+            CodexGlassDivider()
+            Button {
+                open("mailto:zcxzxlc@163.com")
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "envelope.fill")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(theme.primary)
+                        .frame(width: 16)
+                    Text(CodexLocalization.text("邮箱", "Email"))
+                        .font(.system(size: 10.5, weight: .medium))
+                    Spacer(minLength: 4)
+                    Text("zcxzxlc@163.com")
+                        .font(.system(size: 9, weight: .medium, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 8, weight: .semibold))
+                        .foregroundStyle(.tertiary)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(CodexLocalization.text("发送邮件给作者", "Email the author"))
+        }
+    }
+
+    private var releaseUpdatesSettingsSection: some View {
+        settingsSection(CodexLocalization.text("更新", "UPDATES")) {
+            HStack(spacing: 8) {
+                Image(systemName: "shippingbox.fill")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(theme.primary)
+                    .frame(width: 16)
+                Text(CodexLocalization.text("当前版本", "Current version"))
+                    .font(.system(size: 11, weight: .medium))
+                Spacer()
+                Text("v\(CodexReleaseUpdateService.currentVersion)")
+                    .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+
+            CodexGlassDivider()
+            settingToggle(
+                CodexLocalization.text(
+                    "自动检查 GitHub Release",
+                    "Automatically check GitHub releases"
+                ),
+                isOn: $checkReleaseUpdates
+            )
+            .onChange(of: checkReleaseUpdates) { _, value in
+                monitor.writeSetting(value, key: "checkReleaseUpdates")
+            }
+
+            CodexGlassDivider()
+            releaseUpdateStatusRow
+
+            CodexGlassDivider()
+            Button { monitor.checkReleaseUpdate(force: true) } label: {
+                settingActionRow(
+                    CodexLocalization.text("立即检查更新", "Check for updates now"),
+                    symbol: "arrow.clockwise",
+                    trailing: monitor.isCheckingReleaseUpdate
+                        ? CodexLocalization.text("检查中…", "Checking…")
+                        : monitor.releaseUpdate?.checkedAt.formatted(
+                            date: .omitted,
+                            time: .shortened
+                        )
+                )
+            }
+            .buttonStyle(.plain)
+            .disabled(monitor.isCheckingReleaseUpdate)
+
+            if let update = monitor.releaseUpdate, update.isUpdateAvailable {
+                CodexGlassDivider()
+                Button {
+                    open(update.releaseURLString)
+                } label: {
+                    settingActionRow(
+                        CodexLocalization.text(
+                            "查看 v\(update.latestVersion) Release",
+                            "View v\(update.latestVersion) release"
+                        ),
+                        symbol: "arrow.down.circle.fill"
+                    )
+                }
+                .buttonStyle(.plain)
+            }
+
+            Text(CodexLocalization.text(
+                "自动检查最多每 12 小时访问一次 GitHub；API 限流时回退到 latest Release 页面，不会上传额度、会话或本地路径数据。",
+                "Automatic checks access GitHub at most every 12 hours and fall back to the latest-release page when the API is rate-limited. No quota, conversation, or local-path data is uploaded."
+            ))
+                .font(.system(size: 8.5, weight: .medium))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+        }
+    }
+
+    private var releaseUpdateStatusRow: some View {
+        let state = releaseUpdateStatus
+        return HStack(spacing: 8) {
+            Group {
+                if monitor.isCheckingReleaseUpdate {
+                    ProgressView()
+                        .controlSize(.mini)
+                } else {
+                    Image(systemName: state.symbol)
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(state.color)
+                }
+            }
+            .frame(width: 16)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(state.title)
+                    .font(.system(size: 10, weight: .semibold))
+                Text(state.detail)
+                    .font(.system(size: 8, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 4)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+    }
+
+    private var releaseUpdateStatus: (title: String, detail: String, symbol: String, color: Color) {
+        if monitor.isCheckingReleaseUpdate {
+            return (
+                CodexLocalization.text("正在检查更新", "Checking for updates"),
+                CodexLocalization.text("正在读取 GitHub 最新 Release", "Reading the latest GitHub release"),
+                "arrow.clockwise",
+                theme.primary
+            )
+        }
+        if let update = monitor.releaseUpdate {
+            if update.isUpdateAvailable {
+                return (
+                    CodexLocalization.text(
+                        "发现新版本 v\(update.latestVersion)",
+                        "New version v\(update.latestVersion) available"
+                    ),
+                    update.publishedAt.map {
+                        CodexLocalization.text(
+                            "发布于 \($0.formatted(date: .abbreviated, time: .omitted))",
+                            "Published \($0.formatted(date: .abbreviated, time: .omitted))"
+                        )
+                    } ?? update.releaseName,
+                    "arrow.down.circle.fill",
+                    CodexPalette.green(for: appearance)
+                )
+            }
+            return (
+                CodexLocalization.text("已是最新版本", "Up to date"),
+                CodexLocalization.text(
+                    "GitHub 最新版本为 v\(update.latestVersion)",
+                    "Latest GitHub version is v\(update.latestVersion)"
+                ),
+                "checkmark.seal.fill",
+                CodexPalette.green(for: appearance)
+            )
+        }
+        if let error = monitor.releaseUpdateError {
+            return (
+                CodexLocalization.text("更新检查失败", "Update check failed"),
+                error,
+                "exclamationmark.triangle.fill",
+                CodexPalette.yellow(for: appearance)
+            )
+        }
+        if !checkReleaseUpdates {
+            return (
+                CodexLocalization.text("自动检查已关闭", "Automatic checks are off"),
+                CodexLocalization.text("仍可手动检查 GitHub Release", "Manual GitHub release checks remain available"),
+                "pause.circle.fill",
+                .secondary
+            )
+        }
+        return (
+            CodexLocalization.text("等待首次检查", "Waiting for first check"),
+            CodexLocalization.text("打开设置页后将自动检查", "The first check runs automatically"),
+            "clock.fill",
+            .secondary
+        )
     }
 
     private var panelContentSettingsSection: some View {
@@ -2806,13 +3263,25 @@ struct CodexUsageMonitorPanel: View {
     }
 
     private var localCoverageDetail: String {
+        if let progress = monitor.localScanProgress,
+           progress.totalFiles > 0,
+           !progress.isComplete
+        {
+            return CodexLocalization.text(
+                "扫描 \(progress.scannedFiles)/\(progress.totalFiles) · \(progress.historyDays) 天",
+                "Scanning \(progress.scannedFiles)/\(progress.totalFiles) · \(progress.historyDays) days"
+            )
+        }
         guard let snapshot = monitor.recentUsage else {
             return monitor.tokenUsageError
                 ?? CodexLocalization.text("等待 ~/.codex 扫描", "Waiting for ~/.codex scan")
         }
+        let coverage = snapshot.allTimeSummary.costCoverage.tokenPercent.map {
+            " · \(Int($0.rounded()))% cost"
+        } ?? ""
         return CodexLocalization.text(
-            "30 天 · \(snapshot.recentSessions.count) 个会话",
-            "30 days · \(snapshot.recentSessions.count) sessions"
+            "\(snapshot.scanCoverage.historyDays) 天 · \(snapshot.recentSessions.count) 个会话\(coverage)",
+            "\(snapshot.scanCoverage.historyDays) days · \(snapshot.recentSessions.count) sessions\(coverage)"
         )
     }
 
@@ -2939,6 +3408,43 @@ struct CodexUsageMonitorPanel: View {
         String(format: "$%.2f", value)
     }
 
+    private func formatEstimatedUSD(
+        _ value: Double?,
+        coverage: CodexCostCoverage
+    ) -> String {
+        guard let value else { return "—" }
+        let formatted = formatUSD(value)
+        return coverage.isComplete ? formatted : "~\(formatted)"
+    }
+
+    private func recentUsageCoverageLabel(_ coverage: CodexCostCoverage) -> String {
+        guard let percent = coverage.tokenPercent else {
+            return CodexLocalization.text("API 等价估算", "API-equivalent estimate")
+        }
+        return coverage.isComplete
+            ? CodexLocalization.text("API 等价估算 · 完整", "API estimate · complete")
+            : CodexLocalization.text(
+                "API 等价估算 · 覆盖 \(Int(percent.rounded()))%",
+                "API estimate · \(Int(percent.rounded()))% covered"
+            )
+    }
+
+    private var localScanProgressDescription: String {
+        guard let progress = monitor.localScanProgress,
+              progress.totalFiles > 0,
+              !progress.isComplete
+        else {
+            return CodexLocalization.text(
+                "首次扫描可能需要一些时间，之后只读取新增记录。",
+                "The first scan can take a while; later scans read only appended records."
+            )
+        }
+        return CodexLocalization.text(
+            "正在扫描 \(progress.scannedFiles)/\(progress.totalFiles) 个文件 · \(progress.historyDays) 天",
+            "Scanning \(progress.scannedFiles)/\(progress.totalFiles) files · \(progress.historyDays) days"
+        )
+    }
+
     private func resetCreditRemainingDescription(_ expiresAt: Date) -> String? {
         let seconds = Int(expiresAt.timeIntervalSinceNow)
         guard seconds > 0 else { return nil }
@@ -2986,6 +3492,11 @@ struct CodexUsageMonitorPanel: View {
             widgetId: widgetId,
             default: CodexTokenFormat.automatic.title
         ))
+        hourlyActivityRange = CodexHourlyActivityRange.resolve(title: WidgetDefaults.string(
+            key: "hourlyActivityRange",
+            widgetId: widgetId,
+            default: CodexHourlyActivityRange.currentWeek.title
+        ))
         showStatus = WidgetDefaults.bool(key: "showStatus", widgetId: widgetId, default: true)
         let loadedPanelCardConfiguration = CodexPanelCardConfiguration.load(widgetId: widgetId)
         panelCardConfiguration = loadedPanelCardConfiguration
@@ -3010,6 +3521,11 @@ struct CodexUsageMonitorPanel: View {
         )
         showCLILaunch = WidgetDefaults.bool(
             key: "showCLILaunch",
+            widgetId: widgetId,
+            default: true
+        )
+        checkReleaseUpdates = WidgetDefaults.bool(
+            key: "checkReleaseUpdates",
             widgetId: widgetId,
             default: true
         )
@@ -3655,8 +4171,8 @@ private struct CodexConversationRow: View {
                     .foregroundStyle(.secondary)
                     if let usage {
                         Text(CodexLocalization.text(
-                            "\(compactTokenCount(usage.tokens)) Token · \(usage.turnCount) 轮次",
-                            "\(compactTokenCount(usage.tokens)) tokens · \(usage.turnCount) turns"
+                            "\(compactTokenCount(usage.tokens)) Token · \(compactCost(usage)) · \(usage.turnCount) 轮次",
+                            "\(compactTokenCount(usage.tokens)) tokens · \(compactCost(usage)) · \(usage.turnCount) turns"
                         ))
                             .font(.system(size: 7.5, weight: .medium, design: .monospaced))
                             .foregroundStyle(.tertiary)
@@ -3703,6 +4219,14 @@ private struct CodexConversationRow: View {
     private func compactTokenCount(_ value: Int) -> String {
         tokenFormat.format(value)
     }
+
+    private func compactCost(_ usage: CodexSessionUsageSummary) -> String {
+        guard let value = usage.estimatedCostUSD else { return "—" }
+        let formatted = value >= 10
+            ? String(format: "$%.1f", value)
+            : String(format: "$%.2f", value)
+        return (usage.costCoverage?.isComplete ?? true) ? formatted : "~\(formatted)"
+    }
 }
 
 private struct CodexUsageTooltipSizePreferenceKey: PreferenceKey {
@@ -3734,6 +4258,74 @@ private struct CodexHeaderTabTip: View {
                     .strokeBorder(accent.opacity(0.22), lineWidth: 0.5)
             }
             .shadow(color: .black.opacity(0.22), radius: 6, y: 3)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+    }
+}
+
+private struct CodexPaceHoverTip: ViewModifier {
+    let text: String
+    let accent: Color
+
+    @State private var isHovered = false
+
+    private var visuallyHovered: Bool {
+        #if CODEX_USAGE_TESTING
+        isHovered || UserDefaults.standard.bool(forKey: "codexUsage.testing.hoveredPace")
+        #else
+        isHovered
+        #endif
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .contentShape(Rectangle())
+            .overlay(alignment: .topLeading) {
+                if visuallyHovered {
+                    CodexPaceTip(text: text, accent: accent)
+                        .offset(y: -72)
+                        .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .bottomLeading)))
+                }
+            }
+            .zIndex(visuallyHovered ? 40 : 0)
+            .onHover { hovering in
+                withAnimation(.easeInOut(duration: 0.16)) {
+                    isHovered = hovering
+                }
+            }
+            .accessibilityHint(text)
+    }
+}
+
+private struct CodexPaceTip: View {
+    let text: String
+    let accent: Color
+
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 8, weight: .semibold))
+            .foregroundStyle(.primary)
+            .lineLimit(nil)
+            .multilineTextAlignment(.leading)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(width: 220, alignment: .leading)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .background {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(.regularMaterial)
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(Color.primary.opacity(colorScheme == .dark ? 0.055 : 0.025))
+                }
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .strokeBorder(accent.opacity(0.28), lineWidth: 0.6)
+            }
+            .shadow(color: .black.opacity(colorScheme == .dark ? 0.32 : 0.18), radius: 8, y: 4)
             .allowsHitTesting(false)
             .accessibilityHidden(true)
     }

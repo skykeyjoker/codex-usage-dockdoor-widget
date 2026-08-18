@@ -141,6 +141,7 @@ enum CodexPanelCustomizationSection: String, Codable, CaseIterable, Hashable, Id
             return [
                 .localSummary,
                 .localComposition,
+                .localHourlyActivity,
                 .localTopModels,
                 .localPricingSource,
             ]
@@ -191,6 +192,7 @@ enum CodexPanelCardID: String, Codable, Hashable, Identifiable {
     case officialSource
 
     case localSummary
+    case localHourlyActivity
     case localComposition
     case localTopModels
     case localPricingSource
@@ -225,6 +227,7 @@ enum CodexPanelCardID: String, Codable, Hashable, Identifiable {
         case .officialTrend: return CodexLocalization.text("使用趋势", "Usage trend")
         case .officialSource: return CodexLocalization.text("数据来源", "Data source")
         case .localSummary: return CodexLocalization.text("本地汇总", "Local summary")
+        case .localHourlyActivity: return CodexLocalization.text("小时活跃度", "Hourly activity")
         case .localComposition: return CodexLocalization.text("Token 构成", "Token composition")
         case .localTopModels: return CodexLocalization.text("常用模型", "Top models")
         case .localPricingSource: return CodexLocalization.text("价格说明", "Pricing note")
@@ -255,6 +258,7 @@ enum CodexPanelCardID: String, Codable, Hashable, Identifiable {
         case .officialHeatmap: return "calendar.badge.clock"
         case .officialTrend: return "chart.xyaxis.line"
         case .officialSource: return "checkmark.seal.fill"
+        case .localHourlyActivity: return "clock.badge"
         case .localComposition: return "chart.bar.doc.horizontal"
         case .localTopModels: return "cpu"
         case .localPricingSource: return "dollarsign.circle"
@@ -279,7 +283,7 @@ struct CodexPanelCardPreference: Codable, Equatable, Identifiable {
 
 struct CodexPanelCardConfiguration: Codable, Equatable {
     static let storageKey = "panelCardConfigurationV1"
-    private static let version = 1
+    private static let version = 3
 
     var schemaVersion: Int
     var preset: CodexPanelContentPreset
@@ -421,6 +425,7 @@ struct CodexPanelCardConfiguration: Codable, Equatable {
     }
 
     private mutating func normalize() {
+        let requiresHourlyLocationMigration = schemaVersion < 3
         schemaVersion = Self.version
         let allowedPages = Set(CodexPanelConfigurablePage.allCases)
         var normalizedHiddenPages = (hiddenPages ?? []).intersection(allowedPages)
@@ -429,6 +434,13 @@ struct CodexPanelCardConfiguration: Codable, Equatable {
         }
         hiddenPages = normalizedHiddenPages
 
+        let previousHourlyVisibility = sections[CodexPanelCustomizationSection.overview.rawValue]?
+            .first(where: { $0.id == .localHourlyActivity })?.isVisible
+            ?? sections[CodexPanelCustomizationSection.localInsights.rawValue]?
+                .first(where: { $0.id == .localHourlyActivity })?.isVisible
+        let previousLocalSummaryVisibility = sections[CodexPanelCustomizationSection.localInsights.rawValue]?
+            .first(where: { $0.id == .localSummary })?.isVisible
+
         for section in CodexPanelCustomizationSection.allCases {
             let allowed = Set(section.defaultCards)
             var seen = Set<CodexPanelCardID>()
@@ -436,7 +448,36 @@ struct CodexPanelCardConfiguration: Codable, Equatable {
                 allowed.contains(preference.id) && seen.insert(preference.id).inserted
             }
             for card in section.defaultCards where !seen.contains(card) {
-                cards.append(CodexPanelCardPreference(id: card, isVisible: true))
+                let isVisible: Bool
+                if card == .localHourlyActivity {
+                    if let previousHourlyVisibility {
+                        isVisible = previousHourlyVisibility
+                    } else if preset == .simplified {
+                        isVisible = false
+                    } else {
+                        isVisible = previousLocalSummaryVisibility ?? true
+                    }
+                } else {
+                    isVisible = true
+                }
+                let preference = CodexPanelCardPreference(id: card, isVisible: isVisible)
+                let defaultIndex = section.defaultCards.firstIndex(of: card) ?? section.defaultCards.count
+                let followingCards = section.defaultCards.dropFirst(defaultIndex + 1)
+                let insertionIndex = followingCards.compactMap { followingCard in
+                    cards.firstIndex(where: { $0.id == followingCard })
+                }.first ?? cards.count
+                cards.insert(preference, at: insertionIndex)
+                seen.insert(card)
+            }
+            if requiresHourlyLocationMigration,
+               section == .localInsights,
+               let hourlyIndex = cards.firstIndex(where: { $0.id == .localHourlyActivity })
+            {
+                let hourlyPreference = cards.remove(at: hourlyIndex)
+                let insertionIndex = cards.firstIndex(where: { $0.id == .localTopModels })
+                    ?? cards.firstIndex(where: { $0.id == .localPricingSource })
+                    ?? cards.count
+                cards.insert(hourlyPreference, at: insertionIndex)
             }
             if !cards.contains(where: \.isVisible), !cards.isEmpty {
                 cards[0].isVisible = true

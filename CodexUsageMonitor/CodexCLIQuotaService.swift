@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 /// Reads Codex quota windows from the local Codex CLI app-server.
@@ -165,12 +166,21 @@ struct CodexCLIQuotaService {
             throw CLIError.invalidResponse
         }
 
-        let weekly = mainWindows
-            .filter { $0.durationSeconds >= 2 * 24 * 60 * 60 }
+        let monthly = mainWindows
+            .filter { $0.durationSeconds >= 21 * 24 * 60 * 60 }
             .max { $0.durationSeconds < $1.durationSeconds }
+            .map { relabeledWindow($0, id: "monthly", title: CodexLocalization.text("月度", "Monthly")) }
+        let weekly = mainWindows
+            .filter {
+                $0.durationSeconds >= 2 * 24 * 60 * 60
+                    && $0.durationSeconds < 21 * 24 * 60 * 60
+            }
+            .max { $0.durationSeconds < $1.durationSeconds }
+            .map { relabeledWindow($0, id: "weekly", title: CodexLocalization.text("每周", "Weekly")) }
         let session = mainWindows
             .filter { $0.durationSeconds < 2 * 24 * 60 * 60 }
             .min { $0.durationSeconds < $1.durationSeconds }
+            .map { relabeledWindow($0, id: "session", title: CodexLocalization.text("短周期", "Session")) }
 
         let extras = (response.rateLimitsByLimitId ?? [:])
             .sorted { $0.key < $1.key }
@@ -194,7 +204,8 @@ struct CodexCLIQuotaService {
             accountEmail: identity.email,
             plan: identity.plan ?? limits.planType,
             sessionWindow: session,
-            weeklyWindow: weekly ?? mainWindows.max { $0.durationSeconds < $1.durationSeconds },
+            weeklyWindow: weekly,
+            monthlyWindow: monthly,
             extraWindows: extras,
             creditsBalance: limits.credits?.balance.flatMap(Double.init),
             resetCreditsAvailable: nil,
@@ -220,11 +231,30 @@ struct CodexCLIQuotaService {
             durationSeconds: minutes * 60
         )
     }
+
+    private func relabeledWindow(
+        _ window: CodexQuotaWindow,
+        id: String,
+        title: String
+    ) -> CodexQuotaWindow {
+        CodexQuotaWindow(
+            id: id,
+            title: title,
+            usedPercent: window.usedPercent,
+            resetAt: window.resetAt,
+            durationSeconds: window.durationSeconds
+        )
+    }
 }
 
 private final class CodexQuotaRPCClient: @unchecked Sendable {
     private struct SendableMessage: @unchecked Sendable {
         let value: [String: Any]
+    }
+
+    private enum RequestOutcome: @unchecked Sendable {
+        case success(SendableMessage)
+        case failure(Error)
     }
 
     private let process = Process()
@@ -316,7 +346,7 @@ private final class CodexQuotaRPCClient: @unchecked Sendable {
         stdoutPipe.fileHandleForReading.readabilityHandler = nil
         stderrPipe.fileHandleForReading.readabilityHandler = nil
         lineContinuation.finish()
-        if process.isRunning { process.terminate() }
+        stopProcess()
     }
 
     private func request(
@@ -328,33 +358,49 @@ private final class CodexQuotaRPCClient: @unchecked Sendable {
         nextID += 1
         try sendPayload(["id": id, "method": method, "params": params])
 
-        let message = try await withThrowingTaskGroup(of: SendableMessage.self) { group in
+        let outcome = await withTaskGroup(of: RequestOutcome.self) { group in
             group.addTask { [weak self] in
-                guard let self else { throw CodexCLIQuotaService.CLIError.invalidResponse }
-                while true {
-                    let value = try await self.readNextMessage()
-                    if value["id"] == nil { continue }
-                    guard self.integerID(value["id"]) == id else { continue }
-                    if let error = value["error"] as? [String: Any] {
-                        let text = error["message"] as? String
-                            ?? CodexLocalization.text("未知错误", "Unknown error")
-                        throw CodexCLIQuotaService.CLIError.requestFailed(text)
+                do {
+                    guard let self else { throw CodexCLIQuotaService.CLIError.invalidResponse }
+                    while true {
+                        let value = try await self.readNextMessage()
+                        if value["id"] == nil { continue }
+                        guard self.integerID(value["id"]) == id else { continue }
+                        if let error = value["error"] as? [String: Any] {
+                            let text = error["message"] as? String
+                                ?? CodexLocalization.text("未知错误", "Unknown error")
+                            throw CodexCLIQuotaService.CLIError.requestFailed(text)
+                        }
+                        return .success(SendableMessage(value: value))
                     }
-                    return SendableMessage(value: value)
+                } catch {
+                    return .failure(error)
                 }
             }
-            group.addTask { [weak self] in
-                try await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
-                self?.terminateForTimeout()
-                throw CodexCLIQuotaService.CLIError.timeout(method)
+            group.addTask {
+                do {
+                    try await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                    return .failure(CodexCLIQuotaService.CLIError.timeout(method))
+                } catch {
+                    return .failure(CancellationError())
+                }
             }
-            defer { group.cancelAll() }
-            guard let first = try await group.next() else {
-                throw CodexCLIQuotaService.CLIError.timeout(method)
+            guard let first = await group.next() else {
+                return RequestOutcome.failure(CodexCLIQuotaService.CLIError.timeout(method))
             }
+            if case let .failure(error) = first,
+               let cliError = error as? CodexCLIQuotaService.CLIError,
+               case .timeout = cliError
+            {
+                self.terminateForTimeout()
+            }
+            group.cancelAll()
             return first
         }
-        return message.value
+        switch outcome {
+        case let .success(message): return message.value
+        case let .failure(error): throw error
+        }
     }
 
     private func sendPayload(_ payload: [String: Any]) throws {
@@ -382,8 +428,21 @@ private final class CodexQuotaRPCClient: @unchecked Sendable {
     }
 
     private func terminateForTimeout() {
-        if process.isRunning { process.terminate() }
         lineContinuation.finish()
+        stopProcess()
+    }
+
+    private func stopProcess() {
+        try? stdinPipe.fileHandleForWriting.close()
+        guard process.isRunning else { return }
+        process.terminate()
+        let deadline = Date().addingTimeInterval(0.35)
+        while process.isRunning, Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.02)
+        }
+        if process.isRunning {
+            Darwin.kill(process.processIdentifier, SIGKILL)
+        }
     }
 
     private static func resolveExecutable() -> String? {

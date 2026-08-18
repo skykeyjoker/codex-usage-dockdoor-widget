@@ -17,6 +17,7 @@
         "CodexCLIQuotaService.swift",
         "CodexUsageService.swift",
         "CodexQuotaPace.swift",
+        "CodexReleaseUpdateService.swift",
         "CodexUsageMonitor.swift",
         "CodexUsageMonitorView.swift",
         "CodexPanelCustomization.swift",

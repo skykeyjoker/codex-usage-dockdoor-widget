@@ -280,6 +280,94 @@ struct CodexQuotaWindow: Codable, Equatable, Identifiable {
     }
 }
 
+struct CodexMonthlyCreditLimit: Codable, Equatable, Sendable {
+    let used: Double
+    let limit: Double
+    let remainingPercent: Double
+}
+
+enum CodexCostProvenance: String, Codable, Equatable, Sendable {
+    case modelsDev
+    case builtIn
+    case mixed
+    case unknown
+
+    var title: String {
+        switch self {
+        case .modelsDev:
+            CodexLocalization.text("models.dev 动态价表", "models.dev pricing")
+        case .builtIn:
+            CodexLocalization.text("内置价表", "Built-in pricing")
+        case .mixed:
+            CodexLocalization.text("models.dev + 内置回退", "models.dev + built-in fallback")
+        case .unknown:
+            CodexLocalization.text("价格未知", "Unknown pricing")
+        }
+    }
+}
+
+struct CodexCostCoverage: Codable, Equatable, Sendable {
+    let pricedTokens: Int
+    let totalTokens: Int
+    let pricedRequests: Int
+    let totalRequests: Int
+
+    static let empty = CodexCostCoverage(
+        pricedTokens: 0,
+        totalTokens: 0,
+        pricedRequests: 0,
+        totalRequests: 0
+    )
+
+    var tokenFraction: Double? {
+        guard totalTokens > 0 else { return nil }
+        return min(1, max(0, Double(pricedTokens) / Double(totalTokens)))
+    }
+
+    var tokenPercent: Double? { tokenFraction.map { $0 * 100 } }
+    var isComplete: Bool { totalTokens == 0 || pricedTokens >= totalTokens }
+
+    static func combining<S: Sequence>(_ values: S) -> CodexCostCoverage
+    where S.Element == CodexCostCoverage {
+        values.reduce(.empty) { partial, value in
+            CodexCostCoverage(
+                pricedTokens: partial.pricedTokens + value.pricedTokens,
+                totalTokens: partial.totalTokens + value.totalTokens,
+                pricedRequests: partial.pricedRequests + value.pricedRequests,
+                totalRequests: partial.totalRequests + value.totalRequests
+            )
+        }
+    }
+}
+
+struct CodexHourlyUsageBucket: Codable, Equatable, Identifiable, Sendable {
+    let weekday: Int
+    let hour: Int
+    let tokens: Int
+    let requestCount: Int
+
+    var id: String { "\(weekday)-\(hour)" }
+}
+
+struct CodexLocalScanCoverage: Codable, Equatable, Sendable {
+    let scannedFiles: Int
+    let totalFiles: Int
+    let historyDays: Int
+    let isComplete: Bool
+
+    static let empty = CodexLocalScanCoverage(
+        scannedFiles: 0,
+        totalFiles: 0,
+        historyDays: 0,
+        isComplete: true
+    )
+
+    var fraction: Double {
+        guard totalFiles > 0 else { return isComplete ? 1 : 0 }
+        return min(1, max(0, Double(scannedFiles) / Double(totalFiles)))
+    }
+}
+
 struct CodexTokenUsageDay: Codable, Equatable, Identifiable, Sendable {
     let dayKey: String
     let inputTokens: Int
@@ -291,6 +379,8 @@ struct CodexTokenUsageDay: Codable, Equatable, Identifiable, Sendable {
     let requestCount: Int
     let turnCount: Int
     let estimatedCostUSD: Double?
+    let costCoverage: CodexCostCoverage
+    let costProvenance: CodexCostProvenance
 
     var id: String { dayKey }
     var totalTokens: Int { inputTokens + outputTokens }
@@ -314,7 +404,9 @@ struct CodexTokenUsageDay: Codable, Equatable, Identifiable, Sendable {
         priorityTokens: Int,
         requestCount: Int = 0,
         turnCount: Int = 0,
-        estimatedCostUSD: Double?
+        estimatedCostUSD: Double?,
+        costCoverage: CodexCostCoverage = .empty,
+        costProvenance: CodexCostProvenance = .unknown
     ) {
         self.dayKey = dayKey
         self.inputTokens = inputTokens
@@ -326,6 +418,8 @@ struct CodexTokenUsageDay: Codable, Equatable, Identifiable, Sendable {
         self.requestCount = requestCount
         self.turnCount = turnCount
         self.estimatedCostUSD = estimatedCostUSD
+        self.costCoverage = costCoverage
+        self.costProvenance = costProvenance
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -339,6 +433,8 @@ struct CodexTokenUsageDay: Codable, Equatable, Identifiable, Sendable {
         case requestCount
         case turnCount
         case estimatedCostUSD
+        case costCoverage
+        case costProvenance
     }
 
     init(from decoder: Decoder) throws {
@@ -359,6 +455,19 @@ struct CodexTokenUsageDay: Codable, Equatable, Identifiable, Sendable {
             Double.self,
             forKey: .estimatedCostUSD
         )
+        costCoverage = try container.decodeIfPresent(
+            CodexCostCoverage.self,
+            forKey: .costCoverage
+        ) ?? CodexCostCoverage(
+            pricedTokens: estimatedCostUSD == nil ? 0 : inputTokens + outputTokens,
+            totalTokens: inputTokens + outputTokens,
+            pricedRequests: estimatedCostUSD == nil ? 0 : requestCount,
+            totalRequests: requestCount
+        )
+        costProvenance = try container.decodeIfPresent(
+            CodexCostProvenance.self,
+            forKey: .costProvenance
+        ) ?? (estimatedCostUSD == nil ? .unknown : .mixed)
     }
 }
 
@@ -376,6 +485,8 @@ struct CodexUsagePeriodSummary: Codable, Equatable, Sendable {
     let activeDays: Int
     let peakDayKey: String?
     let peakDayTokens: Int
+    let costCoverage: CodexCostCoverage
+    let costProvenance: CodexCostProvenance
 
     var totalTokens: Int { inputTokens + outputTokens }
     var standardTokens: Int { max(0, totalTokens - priorityTokens) }
@@ -401,8 +512,78 @@ struct CodexUsagePeriodSummary: Codable, Equatable, Sendable {
         turnCount: 0,
         activeDays: 0,
         peakDayKey: nil,
-        peakDayTokens: 0
+        peakDayTokens: 0,
+        costCoverage: .empty,
+        costProvenance: .unknown
     )
+
+    init(
+        dayCount: Int,
+        inputTokens: Int,
+        cachedInputTokens: Int,
+        cacheWriteInputTokens: Int,
+        outputTokens: Int,
+        reasoningOutputTokens: Int,
+        priorityTokens: Int,
+        estimatedCostUSD: Double?,
+        requestCount: Int,
+        turnCount: Int,
+        activeDays: Int,
+        peakDayKey: String?,
+        peakDayTokens: Int,
+        costCoverage: CodexCostCoverage = .empty,
+        costProvenance: CodexCostProvenance = .unknown
+    ) {
+        self.dayCount = dayCount
+        self.inputTokens = inputTokens
+        self.cachedInputTokens = cachedInputTokens
+        self.cacheWriteInputTokens = cacheWriteInputTokens
+        self.outputTokens = outputTokens
+        self.reasoningOutputTokens = reasoningOutputTokens
+        self.priorityTokens = priorityTokens
+        self.estimatedCostUSD = estimatedCostUSD
+        self.requestCount = requestCount
+        self.turnCount = turnCount
+        self.activeDays = activeDays
+        self.peakDayKey = peakDayKey
+        self.peakDayTokens = peakDayTokens
+        self.costCoverage = costCoverage
+        self.costProvenance = costProvenance
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case dayCount, inputTokens, cachedInputTokens, cacheWriteInputTokens
+        case outputTokens, reasoningOutputTokens, priorityTokens, estimatedCostUSD
+        case requestCount, turnCount, activeDays, peakDayKey, peakDayTokens
+        case costCoverage, costProvenance
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        dayCount = try container.decode(Int.self, forKey: .dayCount)
+        inputTokens = try container.decode(Int.self, forKey: .inputTokens)
+        cachedInputTokens = try container.decode(Int.self, forKey: .cachedInputTokens)
+        cacheWriteInputTokens = try container.decode(Int.self, forKey: .cacheWriteInputTokens)
+        outputTokens = try container.decode(Int.self, forKey: .outputTokens)
+        reasoningOutputTokens = try container.decodeIfPresent(Int.self, forKey: .reasoningOutputTokens) ?? 0
+        priorityTokens = try container.decode(Int.self, forKey: .priorityTokens)
+        estimatedCostUSD = try container.decodeIfPresent(Double.self, forKey: .estimatedCostUSD)
+        requestCount = try container.decodeIfPresent(Int.self, forKey: .requestCount) ?? 0
+        turnCount = try container.decodeIfPresent(Int.self, forKey: .turnCount) ?? 0
+        activeDays = try container.decodeIfPresent(Int.self, forKey: .activeDays) ?? 0
+        peakDayKey = try container.decodeIfPresent(String.self, forKey: .peakDayKey)
+        peakDayTokens = try container.decodeIfPresent(Int.self, forKey: .peakDayTokens) ?? 0
+        let total = inputTokens + outputTokens
+        costCoverage = try container.decodeIfPresent(CodexCostCoverage.self, forKey: .costCoverage)
+            ?? CodexCostCoverage(
+                pricedTokens: estimatedCostUSD == nil ? 0 : total,
+                totalTokens: total,
+                pricedRequests: estimatedCostUSD == nil ? 0 : requestCount,
+                totalRequests: requestCount
+            )
+        costProvenance = try container.decodeIfPresent(CodexCostProvenance.self, forKey: .costProvenance)
+            ?? (estimatedCostUSD == nil ? .unknown : .mixed)
+    }
 }
 
 struct CodexUsageComparison: Codable, Equatable, Sendable {
@@ -429,6 +610,8 @@ struct CodexModelUsageSummary: Codable, Equatable, Identifiable, Sendable {
     let priorityTokens: Int
     let standardRequestCount: Int
     let priorityRequestCount: Int
+    var costCoverage: CodexCostCoverage? = nil
+    var costProvenance: CodexCostProvenance? = nil
 
     var id: String { model }
 }
@@ -443,6 +626,8 @@ struct CodexProjectUsageSummary: Codable, Equatable, Identifiable, Sendable {
     let turnCount: Int
     let sessionCount: Int
     let lastActiveAt: Date
+    var costCoverage: CodexCostCoverage? = nil
+    var costProvenance: CodexCostProvenance? = nil
 
     var id: String { projectPath }
 }
@@ -465,6 +650,8 @@ struct CodexSessionUsageSummary: Codable, Equatable, Identifiable, Sendable {
     let averageTimeToFirstTokenMilliseconds: Double?
     let compactionCount: Int
     let isActive: Bool
+    var costCoverage: CodexCostCoverage? = nil
+    var costProvenance: CodexCostProvenance? = nil
 }
 
 struct CodexContextHealthSnapshot: Codable, Equatable, Identifiable, Sendable {
@@ -514,11 +701,18 @@ struct CodexRecentUsageSnapshot: Codable, Equatable, Sendable {
     let updatedAt: Date
     let last7DaysSummary: CodexUsagePeriodSummary
     let last30DaysSummary: CodexUsagePeriodSummary
+    let allTimeSummary: CodexUsagePeriodSummary
     let comparison: CodexUsageComparison
     let topModels: [CodexModelUsageSummary]
     let topProjects: [CodexProjectUsageSummary]
     let recentSessions: [CodexSessionUsageSummary]
     let recentContextHealth: [CodexContextHealthSnapshot]
+    let hourly: [CodexHourlyUsageBucket]
+    let hourlyLastYear: [CodexHourlyUsageBucket]
+    let historyStart: Date?
+    let historyEnd: Date?
+    let timeZoneIdentifier: String
+    let scanCoverage: CodexLocalScanCoverage
 
     var chartDays: [CodexTokenUsageDay] {
         Array(daily.suffix(8))
@@ -539,11 +733,18 @@ struct CodexRecentUsageSnapshot: Codable, Equatable, Sendable {
         updatedAt: Date,
         last7DaysSummary: CodexUsagePeriodSummary = .empty,
         last30DaysSummary: CodexUsagePeriodSummary = .empty,
+        allTimeSummary: CodexUsagePeriodSummary = .empty,
         comparison: CodexUsageComparison = .empty,
         topModels: [CodexModelUsageSummary] = [],
         topProjects: [CodexProjectUsageSummary] = [],
         recentSessions: [CodexSessionUsageSummary] = [],
-        recentContextHealth: [CodexContextHealthSnapshot] = []
+        recentContextHealth: [CodexContextHealthSnapshot] = [],
+        hourly: [CodexHourlyUsageBucket] = [],
+        hourlyLastYear: [CodexHourlyUsageBucket]? = nil,
+        historyStart: Date? = nil,
+        historyEnd: Date? = nil,
+        timeZoneIdentifier: String = TimeZone.current.identifier,
+        scanCoverage: CodexLocalScanCoverage = .empty
     ) {
         self.todayTokens = todayTokens
         self.todayEstimatedCostUSD = todayEstimatedCostUSD
@@ -555,11 +756,18 @@ struct CodexRecentUsageSnapshot: Codable, Equatable, Sendable {
         self.updatedAt = updatedAt
         self.last7DaysSummary = last7DaysSummary
         self.last30DaysSummary = last30DaysSummary
+        self.allTimeSummary = allTimeSummary
         self.comparison = comparison
         self.topModels = topModels
         self.topProjects = topProjects
         self.recentSessions = recentSessions
         self.recentContextHealth = recentContextHealth
+        self.hourly = hourly
+        self.hourlyLastYear = hourlyLastYear ?? hourly
+        self.historyStart = historyStart
+        self.historyEnd = historyEnd
+        self.timeZoneIdentifier = timeZoneIdentifier
+        self.scanCoverage = scanCoverage
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -573,11 +781,18 @@ struct CodexRecentUsageSnapshot: Codable, Equatable, Sendable {
         case updatedAt
         case last7DaysSummary
         case last30DaysSummary
+        case allTimeSummary
         case comparison
         case topModels
         case topProjects
         case recentSessions
         case recentContextHealth
+        case hourly
+        case hourlyLastYear
+        case historyStart
+        case historyEnd
+        case timeZoneIdentifier
+        case scanCoverage
     }
 
     init(from decoder: Decoder) throws {
@@ -604,6 +819,10 @@ struct CodexRecentUsageSnapshot: Codable, Equatable, Sendable {
             CodexUsagePeriodSummary.self,
             forKey: .last30DaysSummary
         ) ?? .empty
+        allTimeSummary = try container.decodeIfPresent(
+            CodexUsagePeriodSummary.self,
+            forKey: .allTimeSummary
+        ) ?? last30DaysSummary
         comparison = try container.decodeIfPresent(
             CodexUsageComparison.self,
             forKey: .comparison
@@ -624,6 +843,24 @@ struct CodexRecentUsageSnapshot: Codable, Equatable, Sendable {
             [CodexContextHealthSnapshot].self,
             forKey: .recentContextHealth
         ) ?? []
+        hourly = try container.decodeIfPresent(
+            [CodexHourlyUsageBucket].self,
+            forKey: .hourly
+        ) ?? []
+        hourlyLastYear = try container.decodeIfPresent(
+            [CodexHourlyUsageBucket].self,
+            forKey: .hourlyLastYear
+        ) ?? hourly
+        historyStart = try container.decodeIfPresent(Date.self, forKey: .historyStart)
+        historyEnd = try container.decodeIfPresent(Date.self, forKey: .historyEnd)
+        timeZoneIdentifier = try container.decodeIfPresent(
+            String.self,
+            forKey: .timeZoneIdentifier
+        ) ?? TimeZone.current.identifier
+        scanCoverage = try container.decodeIfPresent(
+            CodexLocalScanCoverage.self,
+            forKey: .scanCoverage
+        ) ?? .empty
     }
 }
 
@@ -632,6 +869,8 @@ struct CodexUsageSnapshot: Codable, Equatable {
     let plan: String?
     let sessionWindow: CodexQuotaWindow?
     let weeklyWindow: CodexQuotaWindow?
+    var monthlyWindow: CodexQuotaWindow? = nil
+    var monthlyCreditLimit: CodexMonthlyCreditLimit? = nil
     let extraWindows: [CodexQuotaWindow]
     let creditsBalance: Double?
     let resetCreditsAvailable: Int?
@@ -745,14 +984,23 @@ struct OpenAIStatusSnapshot: Codable, Equatable {
 enum CodexDisplayLimit: String, CaseIterable, Identifiable {
     case weekly
     case session
+    case monthly
 
     var id: String { rawValue }
     var title: String {
-        self == .weekly
-            ? CodexLocalization.text("每周额度", "Weekly quota")
-            : CodexLocalization.text("短周期额度", "Session quota")
+        switch self {
+        case .weekly: CodexLocalization.text("每周额度", "Weekly quota")
+        case .session: CodexLocalization.text("短周期额度", "Session quota")
+        case .monthly: CodexLocalization.text("月度额度", "Monthly quota")
+        }
     }
-    var shortLabel: String { self == .weekly ? "WEEK" : "SESSION" }
+    var shortLabel: String {
+        switch self {
+        case .weekly: "WEEK"
+        case .session: "SESSION"
+        case .monthly: "MONTH"
+        }
+    }
 
     static func resolve(title: String) -> CodexDisplayLimit {
         allCases.first { item in
@@ -761,7 +1009,11 @@ enum CodexDisplayLimit: String, CaseIterable, Identifiable {
     }
 
     private var localizedTitles: [String] {
-        self == .weekly ? ["每周额度", "Weekly quota"] : ["短周期额度", "Session quota"]
+        switch self {
+        case .weekly: ["每周额度", "Weekly quota"]
+        case .session: ["短周期额度", "Session quota"]
+        case .monthly: ["月度额度", "Monthly quota"]
+        }
     }
 }
 
@@ -784,6 +1036,33 @@ enum CodexDisplayMetric: String, CaseIterable, Identifiable {
 
     private var localizedTitles: [String] {
         self == .remaining ? ["显示剩余", "Show remaining"] : ["显示已用", "Show used"]
+    }
+}
+
+enum CodexHourlyActivityRange: String, CaseIterable, Identifiable {
+    case currentWeek
+    case lastYear
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .currentWeek: return CodexLocalization.text("本周", "This week")
+        case .lastYear: return CodexLocalization.text("近一年", "Last year")
+        }
+    }
+
+    static func resolve(title: String) -> CodexHourlyActivityRange {
+        allCases.first { item in
+            title == item.rawValue || item.localizedTitles.contains(title)
+        } ?? .currentWeek
+    }
+
+    private var localizedTitles: [String] {
+        switch self {
+        case .currentWeek: return ["本周", "This week"]
+        case .lastYear: return ["近一年", "Last year"]
+        }
     }
 }
 

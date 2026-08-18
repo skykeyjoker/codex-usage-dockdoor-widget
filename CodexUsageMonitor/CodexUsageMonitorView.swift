@@ -265,9 +265,7 @@ struct CodexUsageMonitorView: View {
 
         return VStack(alignment: centered ? .center : .leading, spacing: dim * 0.03) {
             HStack(spacing: dim * 0.045) {
-                Text(displayLimit == .weekly
-                    ? CodexLocalization.text("每周", "WEEKLY")
-                    : CodexLocalization.text("短周期", "SESSION"))
+                Text(window.title.uppercased())
                     .font(.system(size: max(9, dim * 0.125), weight: .semibold))
                 if showStatus { compactStatusDot }
             }
@@ -297,6 +295,7 @@ struct CodexUsageMonitorView: View {
             }
         }
     }
+
 
     private func limitsStack(_ usage: CodexUsageSnapshot) -> some View {
         VStack(alignment: isVertical ? .center : .leading, spacing: dim * 0.055) {

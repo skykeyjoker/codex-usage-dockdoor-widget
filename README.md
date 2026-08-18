@@ -193,6 +193,7 @@ The script rejects a bundle unless its executable contains both `arm64` and
 | Theme | System Accent, Codex Teal, Ocean, Violet, Blue Magenta, Mint, Sunset | Applies adaptive light/dark highlights. |
 | Show service status | On / Off | Adds the current OpenAI health indicator to the Dock. |
 | Token format | Automatic / Exact / Millions (2 decimals) / Millions (1 decimal) / Billions (2 decimals) | Controls Token-number rounding throughout the Panel. |
+| Hourly activity range | This week / Last year | Switches both the heatmap data and its range label; defaults to This week. |
 | Panel content preset | Simplified / Full / Custom | Applies a compact default, shows every card, or preserves individual choices. |
 | Page visibility | Quota overview / Usage insights / Projects & tasks / OpenAI status | Hides entire content pages while keeping at least one page available. |
 | Card visibility and order | Per Panel section | Chooses and reorders cards while keeping at least one card in each visible section. |
@@ -201,6 +202,7 @@ The script rejects a bundle unless its executable contains both `arm64` and
 | CLI terminal | Automatic / Terminal / Ghostty / iTerm2 / Warp | Selects the terminal used by the CLI launcher and CLI conversation resume. |
 | Quota usage source | Automatic / OAuth API / CLI RPC | Controls session and weekly quota fetching only. |
 | Refresh interval | 1 / 5 / 15 / 30 minutes | Controls scheduled refresh. |
+| GitHub release checks | On / Off | Checks the public Releases API at most every 12 hours and shows update availability in Settings. |
 
 **Automatic** tries the OAuth quota endpoint first and falls back to the local
 CLI only for missing/expired local sign-in cases. Local Token/cost analytics,
@@ -219,16 +221,17 @@ however, use the following local and remote sources to provide its features.
 
 | Source | Data used | Purpose | Network behavior |
 | --- | --- | --- | --- |
-| `~/.codex/auth.json` (or `$CODEX_HOME/auth.json`) | Existing access/refresh/identity Token and account ID | OAuth quota, reset credits, account email/plan | Direct requests to OpenAI. An OAuth refresh may update this file and restore mode `0600`. |
+| `~/.codex/auth.json` (or `$CODEX_HOME/auth.json`) | Existing access/identity Token and account ID | OAuth quota, reset credits, account email/plan | Read-only. The widget never refreshes or writes Codex credentials; Automatic mode falls back to CLI RPC when OAuth is stale. |
 | Local `codex app-server` in read-only/untrusted mode | `account/read`, `account/rateLimits/read`, `account/usage/read` aggregate responses | CLI quota source, credits, official activity | The widget communicates with a local Codex process over stdin/stdout. |
 | `~/.codex/sessions` and `~/.codex/archived_sessions` | Token counts, model/service tier, timestamps, turn/session IDs, project path, context and timing metadata | Local usage, projects, task efficiency, context health | Read locally; this widget does not upload these logs. |
 | `~/.codex/history.jsonl` and session prefixes | First local user message/title, session ID, project path, modified time | Recent conversation list and Codex deep links | Read locally into memory; titles are not persisted by this widget or uploaded. |
 | `~/.codex/logs_2.sqlite` | Short-lived websocket trace metadata | More accurate Fast/Priority attribution | Read locally with `/usr/bin/sqlite3 -readonly`. |
 | `https://chatgpt.com/backend-api/wham/usage` | Quota windows, plan, credits, extra limits | OAuth quota source | Bearer-authenticated direct request to OpenAI. |
 | `https://chatgpt.com/backend-api/wham/rate-limit-reset-credits` | Reset-credit count and expiry | Reset-credit card | Bearer-authenticated direct request to OpenAI. |
-| `https://auth.openai.com/oauth/token` | Refresh Token | Refresh an expired local Codex login | Direct request to OpenAI; refreshed credentials are written back to Codex's auth file. |
+| `https://chatgpt.com/backend-api/accounts/{account}/spend-controls/current-user/monthly-usage` | Administrator monthly usage and limit | Business/Team/EDU/Enterprise monthly quota fallback | Bearer-authenticated direct request to OpenAI for eligible workspace plans. |
 | `https://models.dev/api.json` | Public model price catalog | API-equivalent cost estimates | Anonymous request; bundled prices are the fallback. |
 | `https://status.openai.com` | Overall and component status | ChatGPT/Codex service-status page and Dock indicator | Anonymous request. |
+| GitHub Releases API and `/releases/latest` redirect | Latest stable tag, name, URL, and publish time when available | Optional release-update reminder in Settings | Anonymous request, enabled by default and throttled to at most once every 12 hours. The redirect is the API rate-limit fallback; no local widget data is sent. |
 
 The ChatGPT `backend-api/wham` endpoints are not a public, versioned API and may
 change without notice. The CLI RPC option is available as an alternative quota
@@ -246,17 +249,21 @@ source.
   written to a widget cache.
 - Quick launch uses only local application discovery and local session IDs.
   It does not send launch or resume activity to a developer-operated service.
+- Release checks send only a standard anonymous request to GitHub's public
+  Releases API and never include quota, conversation, project, or path data.
 - DockDoor Pro `UserDefaults` stores widget settings and aggregate snapshots.
   Those snapshots can include account email/plan, quota, status, project paths,
   session IDs, Token totals, costs, and health metrics, but not OAuth Tokens.
 - Incremental local-log state is cached at:
 
   ```text
-  ~/Library/Caches/DockDoorPro/CodexUsageMonitor/local-token-cache.json
+  ~/Library/Caches/DockDoorPro/CodexUsageMonitor/local-token-cache.sqlite
   ```
 
-  It contains file/session/project metadata and aggregate Token events, not
-  prompt text or credentials.
+  It uses SQLite WAL with per-file incremental offsets and transactional
+  updates. It contains file/session/project metadata and aggregate Token
+  events, not prompt text or credentials. A legacy JSON cache is read once for
+  migration but is no longer rewritten.
 - The models.dev catalog is cached at:
 
   ```text
@@ -280,6 +287,10 @@ removes unrelated DockDoor Pro settings, so it is not recommended.
 - Pricing applies model-specific input, output, cache read/write,
   long-context, and Fast/Priority rules when the required metadata is present.
 - `models.dev` is preferred; a built-in OpenAI price table is the fallback.
+- Partial cost estimates are prefixed with `~` and report priced Token/request
+  coverage instead of presenting incomplete totals as complete bills.
+- Local history uses a pinned Gregorian/IANA-time-zone scan, retains up to 365
+  days, and exposes 7-day, 30-day, and All-time summaries plus hourly activity.
 - Local counts depend on the fields present in the installed Codex version and
   available session history. Archived or deleted logs cannot be reconstructed.
 - Fast/Priority trace data is short-lived. Explicit trace evidence takes

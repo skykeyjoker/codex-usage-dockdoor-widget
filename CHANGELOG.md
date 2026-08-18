@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.1.2 - 2026-08-18
+
+- Enlarged the one-slot quota ring to match the shared Dock widget footprint.
+- Repositioned the one-slot service-status dot against the ring edge and
+  replaced its bright white border with a subtle adaptive outline.
+- Regenerated the Dock layout screenshots from the updated SwiftUI source.
+
 ## 1.1.1 - 2026-08-11
 
 - Increased the horizontal separation between the quota ring and its adjacent

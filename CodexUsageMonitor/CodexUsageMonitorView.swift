@@ -12,6 +12,7 @@ struct CodexUsageMonitorView: View {
 
     private static let carouselInterval: TimeInterval = 8
     private var dim: CGFloat { min(size.width, size.height) }
+    private var compactRingSize: CGFloat { dim * WidgetMetrics.contentScale }
     private var horizontalRingMetricSpacing: CGFloat { dim * 0.14 }
     private var slotSpan: WidgetSlotSpan { WidgetSlotSpan.detect(size: size, isVertical: isVertical) }
     private var theme: CodexThemeColors {
@@ -67,7 +68,7 @@ struct CodexUsageMonitorView: View {
             if let window = monitor.window(for: displayLimit) {
                 ZStack {
                     compactRing(window, style: activeStyle)
-                        .padding(dim * 0.09)
+                        .frame(width: compactRingSize, height: compactRingSize)
                         .id(activeStyle)
                         .transition(.opacity.combined(with: .scale(scale: 0.94)))
 
@@ -85,11 +86,15 @@ struct CodexUsageMonitorView: View {
                             .transition(.opacity.combined(with: .scale(scale: 0.92)))
                     }
                 }
+                .frame(width: compactRingSize, height: compactRingSize)
                 .animation(.easeInOut(duration: 0.35), value: activeStyle)
                 .overlay(alignment: .topTrailing) {
                     if showStatus {
-                        compactStatusDot
-                            .padding(dim * 0.10)
+                        statusDot(size: compactRingSize * 0.13)
+                            .offset(
+                                x: compactRingSize * 0.015,
+                                y: -compactRingSize * 0.015
+                            )
                     }
                 }
             } else {
@@ -363,11 +368,18 @@ struct CodexUsageMonitorView: View {
     }
 
     private var compactStatusDot: some View {
+        statusDot(size: max(5, dim * 0.07))
+    }
+
+    private func statusDot(size: CGFloat) -> some View {
         let indicator = monitor.serviceStatus?.overallIndicator ?? .unknown
         return Circle()
             .fill(indicator.color(for: appearance))
-            .frame(width: max(5, dim * 0.07), height: max(5, dim * 0.07))
-            .overlay(Circle().stroke(Color.white.opacity(0.55), lineWidth: 0.8))
+            .frame(width: size, height: size)
+            .overlay {
+                Circle()
+                    .stroke(Color.primary.opacity(0.16), lineWidth: 0.6)
+            }
             .shadow(
                 color: indicator.color(for: appearance).opacity(0.28),
                 radius: 2

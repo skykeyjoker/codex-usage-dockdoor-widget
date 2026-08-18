@@ -8,7 +8,14 @@ Dock and a native SwiftUI panel.
 > This widget is distributed independently and is not part of the DockDoor Pro
 > marketplace. Installation is manual.
 
-## What's new in 1.1.1
+## What's new in 1.1.2
+
+- The one-slot quota ring now uses the same full-size footprint as the
+  Pomodoro widget for better Dock readability.
+- The service-status dot now follows the ring edge and uses the subtler
+  low-contrast outline from the Pomodoro widget.
+
+## 1.1.1 highlights
 
 - Two- and three-slot Dock layouts now provide clearer separation between the
   quota ring and the adjacent percentage, reset, and service-status metrics.

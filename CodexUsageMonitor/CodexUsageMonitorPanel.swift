@@ -8,25 +8,20 @@ struct CodexUsageMonitorPanel: View {
     @Environment(\.colorScheme) private var appearance
 
     #if CODEX_USAGE_TESTING
-    @State private var page: CodexPanelPage = {
-        switch UserDefaults.standard.string(forKey: "codexUsage.testing.page") {
-        case "insights": return .insights
-        case "conversations", "work": return .work
-        case "status": return .status
-        case "settings": return .settings
-        default: return .overview
-        }
-    }()
+    @State private var page: CodexPanelPage
     #else
     @State private var page: CodexPanelPage = .overview
     #endif
     @State private var displayLimit = CodexDisplayLimit.weekly
+    @State private var dockProvider = CodexDockProvider.codex
+    @State private var cursorUsageEnabled = true
     @State private var displayMetric = CodexDisplayMetric.remaining
     @State private var ringStyle = CodexRingStyle.concentric
     @State private var colorTheme = CodexColorTheme.codex
     @State private var quotaUsageSource = CodexQuotaUsageSource.automatic
     @State private var refreshInterval = CodexRefreshInterval.fiveMinutes
     @State private var tokenFormat = CodexTokenFormat.automatic
+    @State private var displayCurrency = CodexCurrency.usd
     @State private var hourlyActivityRange = CodexHourlyActivityRange.currentWeek
     @State private var showStatus = true
     @State private var showQuickLaunchBar = true
@@ -86,9 +81,39 @@ struct CodexUsageMonitorPanel: View {
     @State private var appeared = false
     #endif
 
+    #if CODEX_USAGE_TESTING
+    init(
+        widgetId: String,
+        monitor: CodexUsageMonitor,
+        testingPage: String? = nil
+    ) {
+        self.widgetId = widgetId
+        self.monitor = monitor
+        let value = testingPage
+            ?? UserDefaults.standard.string(forKey: "codexUsage.testing.page")
+            ?? "overview"
+        _page = State(initialValue: Self.testingPage(value))
+    }
+
+    private static func testingPage(_ value: String) -> CodexPanelPage {
+        switch value {
+        case "codex": return .codex
+        case "cursor": return .cursor
+        case "insights": return .insights
+        case "conversations", "work": return .work
+        case "status": return .status
+        case "settings": return .settings
+        default: return .overview
+        }
+    }
+    #endif
+
     private let panelWidth: CGFloat = 360
     private let panelContentWidth: CGFloat = 332
     private var theme: CodexThemeColors { colorTheme.colors(for: appearance) }
+    private var currencyContext: CodexCurrencyContext {
+        CodexCurrencyContext(currency: displayCurrency, exchangeRates: monitor.exchangeRates)
+    }
     private let panelHeight: CGFloat = 520
     private var shouldShowQuickLaunchBar: Bool {
         showQuickLaunchBar && (showCodexLaunch || showGPTClassicLaunch || showCLILaunch)
@@ -104,7 +129,9 @@ struct CodexUsageMonitorPanel: View {
             ScrollView(.vertical) {
                 VStack(alignment: .leading, spacing: 0) {
                     switch page {
-                    case .overview: overviewPage
+                    case .overview: quotaLandingPage
+                    case .codex: codexPage
+                    case .cursor: cursorPage
                     case .insights: insightsPage
                     case .work: workPage
                     case .status: statusPage
@@ -140,6 +167,7 @@ struct CodexUsageMonitorPanel: View {
         }
         .frame(width: panelWidth, alignment: .leading)
         .environment(\.codexCardTheme, theme)
+        .environment(\.codexCurrencyContext, currencyContext)
         .background(panelBackground)
         .opacity(appeared ? 1 : 0)
         .onAppear {
@@ -173,6 +201,10 @@ struct CodexUsageMonitorPanel: View {
             loadSettings()
         }
         .task(id: page) {
+            if page == .cursor {
+                monitor.refreshCursor()
+                return
+            }
             guard page == .work else { return }
             monitor.refreshConversations()
             while !Task.isCancelled {
@@ -189,9 +221,7 @@ struct CodexUsageMonitorPanel: View {
 
     private var header: some View {
         HStack(spacing: 9) {
-            Image(systemName: headerSymbol)
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(theme.gradient)
+            headerLeadingIcon
 
             VStack(alignment: .leading, spacing: 1) {
                 Text(headerTitle)
@@ -210,12 +240,10 @@ struct CodexUsageMonitorPanel: View {
                 releaseUpdateHeaderButton(update)
             }
 
-            if monitor.isRefreshing || monitor.isRefreshingConversations {
+            if headerIsRefreshing {
                 ProgressView().controlSize(.mini)
             } else if showStatus || page == .status {
-                CodexPulseDot(
-                    color: monitor.serviceStatus?.overallIndicator.color(for: appearance) ?? theme.primary
-                )
+                CodexPulseDot(color: headerStatusColor)
             }
 
             ForEach(panelCardConfiguration.visiblePages) { configurablePage in
@@ -240,6 +268,69 @@ struct CodexUsageMonitorPanel: View {
                 endPoint: .bottom
             )
         )
+    }
+
+    @ViewBuilder
+    private var headerLeadingIcon: some View {
+        switch page {
+        case .overview:
+            if cursorUsageEnabled {
+                Image(systemName: "square.grid.2x2.fill")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(theme.gradient)
+                    .frame(width: 16, height: 16)
+            } else {
+                CodexProviderIcon(brand: .codex, size: 16, color: theme.primary)
+            }
+        case .codex:
+            CodexProviderIcon(brand: .codex, size: 16, color: theme.primary)
+        case .cursor:
+            CodexProviderIcon(brand: .cursor, size: 16, color: cursorAccent)
+        case .insights:
+            Image(systemName: "chart.xyaxis.line")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(theme.gradient)
+                .frame(width: 16, height: 16)
+        case .work:
+            Image(systemName: "bubble.left.and.text.bubble.right.fill")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(theme.gradient)
+                .frame(width: 16, height: 16)
+        case .status:
+            Image(systemName: "waveform.path.ecg")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(theme.gradient)
+                .frame(width: 16, height: 16)
+        case .settings:
+            Image(systemName: "gearshape.fill")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(theme.gradient)
+                .frame(width: 16, height: 16)
+        }
+    }
+
+    private var headerStatusColor: Color {
+        if page == .cursor {
+            return cursorIsHealthy
+                ? CodexPalette.green(for: appearance)
+                : CodexPalette.yellow(for: appearance)
+        }
+        return monitor.serviceStatus?.overallIndicator.color(for: appearance) ?? theme.primary
+    }
+
+    private var headerIsRefreshing: Bool {
+        switch page {
+        case .overview:
+            return monitor.isRefreshing || (cursorUsageEnabled && monitor.isRefreshingCursor)
+        case .codex:
+            return monitor.isRefreshing
+        case .cursor:
+            return monitor.isRefreshingCursor
+        case .work:
+            return monitor.isRefreshing || monitor.isRefreshingConversations
+        case .insights, .status, .settings:
+            return monitor.isRefreshing
+        }
     }
 
     private func releaseUpdateHeaderButton(
@@ -344,30 +435,33 @@ struct CodexUsageMonitorPanel: View {
             : CodexLocalization.text("切换到此页面", "Switch to this page"))
     }
 
-    private var headerSymbol: String {
-        switch page {
-        case .overview: return "terminal.fill"
-        case .insights: return "chart.xyaxis.line"
-        case .work: return "bubble.left.and.text.bubble.right.fill"
-        case .status: return "waveform.path.ecg"
-        case .settings: return "gearshape.fill"
-        }
-    }
-
     private var headerTitle: String {
         switch page {
-        case .overview: return "Codex"
+        case .overview:
+            return cursorUsageEnabled
+                ? CodexLocalization.text("额度概览", "Usage Overview")
+                : "Codex"
+        case .codex: return "Codex"
+        case .cursor: return "Cursor"
         case .insights: return CodexLocalization.text("用量洞察", "Usage Insights")
         case .work: return CodexLocalization.text("项目与任务", "Projects & Tasks")
         case .status: return CodexLocalization.text("OpenAI 状态", "OpenAI Status")
-        case .settings: return CodexLocalization.text("Codex 设置", "Codex Settings")
+        case .settings: return CodexLocalization.text("组件设置", "Widget Settings")
         }
     }
 
     private var headerSubtitle: String {
         switch page {
         case .overview:
+            return cursorUsageEnabled
+                ? CodexLocalization.text("2 个服务", "2 providers")
+                : (monitor.usage?.accountEmail
+                    ?? CodexLocalization.text("额度监控", "Quota monitor"))
+        case .codex:
             return monitor.usage?.accountEmail ?? CodexLocalization.text("额度监控", "Quota monitor")
+        case .cursor:
+            return monitor.cursorUsage?.accountEmail
+                ?? CodexLocalization.text("额度与用量", "Quota and usage")
         case .insights:
             return CodexLocalization.text("官方活动 · 本地估算", "Official activity · local estimates")
         case .work:
@@ -388,9 +482,66 @@ struct CodexUsageMonitorPanel: View {
         }
     }
 
+    private var cursorPage: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            providerPicker
+            CursorUsagePanelView(
+                snapshot: monitor.cursorUsage,
+                error: monitor.cursorUsageError,
+                isRefreshing: monitor.isRefreshingCursor,
+                onRefresh: monitor.refreshCursor,
+                onOpenDashboard: { open("https://cursor.com/dashboard?tab=usage") },
+                onOpenStatus: { open("https://status.cursor.com") },
+                onOpenCursor: openCursorApp
+            )
+        }
+    }
+
     @ViewBuilder
-    private var overviewPage: some View {
+    private var quotaLandingPage: some View {
+        if cursorUsageEnabled {
+            aggregatePage
+        } else {
+            codexContent(showsProviderPicker: false)
+        }
+    }
+
+    private var aggregatePage: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            providerPicker
+            CodexProviderOverviewView(
+                codexUsage: monitor.usage,
+                codexRecentUsage: monitor.recentUsage,
+                codexError: monitor.usageError,
+                cursorUsage: monitor.cursorUsage,
+                cursorError: monitor.cursorUsageError,
+                codexAccent: theme.primary,
+                cursorAccent: cursorAccent,
+                onSelectCodex: {
+                    withAnimation(.spring(response: 0.25, dampingFraction: 0.82)) {
+                        page = .codex
+                    }
+                },
+                onSelectCursor: {
+                    withAnimation(.spring(response: 0.25, dampingFraction: 0.82)) {
+                        page = .cursor
+                    }
+                }
+            )
+        }
+    }
+
+    @ViewBuilder
+    private var codexPage: some View {
+        codexContent(showsProviderPicker: true)
+    }
+
+    @ViewBuilder
+    private func codexContent(showsProviderPicker: Bool) -> some View {
         VStack(alignment: .leading, spacing: 14) {
+            if showsProviderPicker {
+                providerPicker
+            }
             if let usage = monitor.usage {
                 ForEach(panelCardConfiguration.visibleCards(in: .overview)) { card in
                     overviewCard(card, usage: usage)
@@ -401,6 +552,79 @@ struct CodexUsageMonitorPanel: View {
                 loadingCard
             }
         }
+    }
+
+    private var providerPicker: some View {
+        HStack(spacing: 5) {
+            providerPickerButton(
+                title: CodexLocalization.text("概览", "Overview"),
+                symbol: "square.grid.2x2.fill",
+                target: .overview,
+                accent: theme.primary
+            )
+            providerPickerButton(
+                title: "Codex",
+                brand: .codex,
+                target: .codex,
+                accent: theme.primary
+            )
+            providerPickerButton(
+                title: "Cursor",
+                brand: .cursor,
+                target: .cursor,
+                accent: cursorAccent
+            )
+        }
+        .padding(3)
+        .background(Color.primary.opacity(0.055), in: RoundedRectangle(cornerRadius: 9))
+    }
+
+    private func providerPickerButton(
+        title: String,
+        symbol: String? = nil,
+        brand: CodexProviderBrand? = nil,
+        target: CodexPanelPage,
+        accent: Color
+    ) -> some View {
+        let selected = page == target
+        return Button {
+            withAnimation(.spring(response: 0.25, dampingFraction: 0.82)) {
+                page = target
+            }
+        } label: {
+            HStack(spacing: 6) {
+                if let brand {
+                    CodexProviderIcon(
+                        brand: brand,
+                        size: 12,
+                        color: selected ? accent : .secondary
+                    )
+                } else if let symbol {
+                    Image(systemName: symbol)
+                }
+                Text(title)
+            }
+            .font(.system(size: 9.5, weight: .semibold))
+            .frame(maxWidth: .infinity, minHeight: 32)
+            .contentShape(Rectangle())
+            .foregroundStyle(selected ? accent : Color.secondary)
+            .background(
+                accent.opacity(selected ? 0.13 : 0),
+                in: RoundedRectangle(cornerRadius: 7)
+            )
+        }
+        .buttonStyle(.plain)
+        .help(CodexLocalization.text("切换到 \(title)", "Switch to \(title)"))
+    }
+
+    private var cursorAccent: Color {
+        appearance == .dark
+            ? Color(red: 0.16, green: 0.68, blue: 0.60)
+            : Color(red: 0.00, green: 0.70, blue: 0.61)
+    }
+
+    private var availableDockProviders: [CodexDockProvider] {
+        cursorUsageEnabled ? CodexDockProvider.allCases : [.codex]
     }
 
     @ViewBuilder
@@ -507,9 +731,7 @@ struct CodexUsageMonitorPanel: View {
             ZStack {
                 RoundedRectangle(cornerRadius: 9)
                     .fill(theme.primary.opacity(0.14))
-                Image(systemName: "terminal.fill")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(theme.primary)
+                CodexProviderIcon(brand: .codex, size: 18, color: theme.primary)
             }
             .frame(width: 36, height: 36)
 
@@ -908,7 +1130,7 @@ struct CodexUsageMonitorPanel: View {
                             .transition(.opacity)
                     } else {
                         Text(snapshot.chartDays.compactMap(\.estimatedCostUSD).max().map {
-                            "$\(Int($0.rounded()))"
+                            currencyContext.formatUSD($0, compact: true)
                         } ?? formatTokenCount(snapshot.chartDays.map(\.totalTokens).max() ?? 0))
                             .font(.system(size: 8, weight: .medium, design: .monospaced))
                             .foregroundStyle(.secondary)
@@ -2185,7 +2407,7 @@ struct CodexUsageMonitorPanel: View {
             }
         case .statusCodex:
             if let codex = status.codex {
-                statusGroupCard(codex, symbol: "terminal.fill")
+                statusGroupCard(codex, brand: .codex)
             }
         case .statusFooter:
             statusFooter
@@ -2235,15 +2457,21 @@ struct CodexUsageMonitorPanel: View {
 
     private func statusGroupCard(
         _ group: OpenAIStatusGroup,
-        symbol: String
+        symbol: String? = nil,
+        brand: CodexProviderBrand? = nil
     ) -> some View {
         let groupColor = group.indicator.color(for: appearance)
         return VStack(spacing: 0) {
             HStack(spacing: 8) {
-                Image(systemName: symbol)
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(theme.primary)
-                    .frame(width: 18)
+                if let brand {
+                    CodexProviderIcon(brand: brand, size: 13, color: theme.primary)
+                        .frame(width: 18)
+                } else if let symbol {
+                    Image(systemName: symbol)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(theme.primary)
+                        .frame(width: 18)
+                }
                 Text(group.name)
                     .font(.system(size: 12, weight: .bold))
                 Spacer()
@@ -2310,11 +2538,32 @@ struct CodexUsageMonitorPanel: View {
             #endif
 
             settingsSection(CodexLocalization.text("DOCK 展示", "DOCK DISPLAY")) {
+                settingPicker(CodexLocalization.text("服务", "Provider"), selection: $dockProvider) {
+                    ForEach(availableDockProviders) { provider in
+                        Text(provider.title).tag(provider)
+                    }
+                }
+                .onChange(of: dockProvider) { _, value in
+                    monitor.writeSetting(value.title, key: "dockProvider")
+                }
+                CodexGlassDivider()
                 settingPicker(CodexLocalization.text("主额度", "Primary quota"), selection: $displayLimit) {
                     ForEach(CodexDisplayLimit.allCases) { Text($0.title).tag($0) }
                 }
+                .disabled(dockProvider == .cursor)
+                .opacity(dockProvider == .cursor ? 0.55 : 1)
                 .onChange(of: displayLimit) { _, value in
                     monitor.writeSetting(value.title, key: "displayLimit")
+                }
+                if dockProvider == .cursor {
+                    Text(CodexLocalization.text(
+                        "Cursor 模式固定显示“总计”额度。",
+                        "Cursor always uses the Total quota."
+                    ))
+                        .font(.system(size: 8, weight: .medium))
+                        .foregroundStyle(.tertiary)
+                        .padding(.horizontal, 10)
+                        .padding(.bottom, 7)
                 }
                 CodexGlassDivider()
                 settingPicker(CodexLocalization.text("数值", "Value"), selection: $displayMetric) {
@@ -2327,8 +2576,21 @@ struct CodexUsageMonitorPanel: View {
                 settingPicker(CodexLocalization.text("圆环样式", "Ring Style"), selection: $ringStyle) {
                     ForEach(CodexRingStyle.allCases) { Text($0.title).tag($0) }
                 }
+                .disabled(dockProvider == .both)
+                .opacity(dockProvider == .both ? 0.55 : 1)
                 .onChange(of: ringStyle) { _, value in
                     monitor.writeSetting(value.title, key: "ringStyle")
+                }
+                if dockProvider == .both {
+                    Text(CodexLocalization.text(
+                        "同时展示使用固定双轨圆环；圆环样式与自动轮播暂不生效，切回单源后恢复原设置。",
+                        "Combined mode uses a fixed dual-track ring. Ring styles and auto carousel are temporarily disabled and resume for a single provider."
+                    ))
+                        .font(.system(size: 8, weight: .medium))
+                        .foregroundStyle(.tertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.horizontal, 10)
+                        .padding(.bottom, 7)
                 }
                 CodexGlassDivider()
                 settingPicker(CodexLocalization.text("主题", "Theme"), selection: $colorTheme) {
@@ -2362,6 +2624,26 @@ struct CodexUsageMonitorPanel: View {
                 }
                 .onChange(of: tokenFormat) { _, value in
                     monitor.writeSetting(value.title, key: "tokenFormat")
+                }
+                CodexGlassDivider()
+                settingPicker(
+                    CodexLocalization.text("货币单位", "Currency"),
+                    selection: $displayCurrency
+                ) {
+                    ForEach(CodexCurrency.allCases) { currency in
+                        Text(currency.title).tag(currency)
+                    }
+                }
+                .onChange(of: displayCurrency) { _, value in
+                    monitor.writeSetting(value.title, key: "displayCurrency")
+                }
+                if displayCurrency != .usd {
+                    Text(exchangeRateStatusText)
+                        .font(.system(size: 8.2, weight: .medium))
+                        .foregroundStyle(monitor.exchangeRateError == nil ? Color.secondary : .orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.horizontal, 10)
+                        .padding(.bottom, 7)
                 }
                 CodexGlassDivider()
                 settingPicker(
@@ -2440,7 +2722,59 @@ struct CodexUsageMonitorPanel: View {
                     .opacity(showQuickLaunchBar && showCLILaunch ? 1 : 0.48)
             }
 
-            settingsSection(CodexLocalization.text("连接", "CONNECTION")) {
+            settingsSection(CodexLocalization.text("刷新", "REFRESH")) {
+                settingPicker(CodexLocalization.text("频率", "Interval"), selection: $refreshInterval) {
+                    ForEach(CodexRefreshInterval.allCases) { Text($0.title).tag($0) }
+                }
+                .onChange(of: refreshInterval) { _, value in
+                    monitor.writeSetting(value.title, key: "refreshInterval")
+                }
+                CodexGlassDivider()
+                Button {
+                    monitor.refresh()
+                    if displayCurrency != .usd {
+                        monitor.refreshExchangeRates(force: true)
+                    }
+                } label: {
+                    settingActionRow(
+                        CodexLocalization.text("立即刷新", "Refresh now"),
+                        symbol: "arrow.clockwise",
+                        trailing: monitor.isRefreshing || monitor.isRefreshingExchangeRates
+                            ? CodexLocalization.text("更新中…", "Updating…")
+                            : nil
+                    )
+                }
+                .buttonStyle(.plain)
+                .disabled(monitor.isRefreshing || monitor.isRefreshingExchangeRates)
+            }
+
+            settingsSection("CODEX") {
+                HStack(spacing: 8) {
+                    CodexProviderIcon(brand: .codex, size: 12, color: theme.primary)
+                        .frame(width: 16)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(monitor.usage?.accountEmail
+                            ?? CodexLocalization.text("Codex 本地登录", "Codex local login"))
+                            .font(.system(size: 10.5, weight: .semibold))
+                            .lineLimit(1)
+                        Text(monitor.usageError
+                            ?? monitor.usage?.displayPlan
+                            ?? CodexLocalization.text("等待检测", "Waiting for detection"))
+                            .font(.system(size: 8, weight: .medium))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                    Spacer(minLength: 4)
+                    Circle()
+                        .fill(codexIsHealthy
+                            ? CodexPalette.green(for: appearance)
+                            : CodexPalette.yellow(for: appearance))
+                        .frame(width: 7, height: 7)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+
+                CodexGlassDivider()
                 VStack(alignment: .leading, spacing: 5) {
                     HStack(spacing: 8) {
                         Text(CodexLocalization.text("额度来源", "Quota usage source"))
@@ -2470,47 +2804,17 @@ struct CodexUsageMonitorPanel: View {
                 .onChange(of: quotaUsageSource) { _, value in
                     monitor.writeSetting(value.title, key: "quotaUsageSource")
                 }
-            }
 
-            dataHealthSection
-
-            settingsSection(CodexLocalization.text("刷新", "REFRESH")) {
-                settingPicker(CodexLocalization.text("频率", "Interval"), selection: $refreshInterval) {
-                    ForEach(CodexRefreshInterval.allCases) { Text($0.title).tag($0) }
-                }
-                .onChange(of: refreshInterval) { _, value in
-                    monitor.writeSetting(value.title, key: "refreshInterval")
-                }
                 CodexGlassDivider()
-                Button { monitor.refresh() } label: {
-                    settingActionRow(
-                        CodexLocalization.text("立即刷新", "Refresh now"),
-                        symbol: "arrow.clockwise",
-                        trailing: monitor.isRefreshing
-                            ? CodexLocalization.text("更新中…", "Updating…")
-                            : nil
-                    )
-                }
-                .buttonStyle(.plain)
-                .disabled(monitor.isRefreshing)
-            }
-
-            #if CODEX_USAGE_TESTING
-            if !UserDefaults.standard.bool(forKey: "codexUsage.testing.releaseUpdatesFirst") {
-                releaseUpdatesSettingsSection
-            }
-            #else
-            releaseUpdatesSettingsSection
-            #endif
-
-            settingsSection(CodexLocalization.text("账户与链接", "ACCOUNT & LINKS")) {
                 Button { open("https://chatgpt.com/codex/settings/usage") } label: {
-                    settingActionRow(
+                    settingProviderActionRow(
                         CodexLocalization.text("Codex 用量仪表盘", "Codex usage dashboard"),
-                        symbol: "gauge.with.dots.needle.67percent"
+                        brand: .codex,
+                        accent: theme.primary
                     )
                 }
                 .buttonStyle(.plain)
+
                 CodexGlassDivider()
                 Button { open("https://status.openai.com") } label: {
                     settingActionRow(
@@ -2521,13 +2825,131 @@ struct CodexUsageMonitorPanel: View {
                 .buttonStyle(.plain)
             }
 
+            settingsSection("CURSOR") {
+                settingToggle(
+                    CodexLocalization.text("启用 Cursor 数据统计", "Enable Cursor analytics"),
+                    isOn: $cursorUsageEnabled
+                )
+                .onChange(of: cursorUsageEnabled) { _, enabled in
+                    monitor.writeSetting(enabled, key: "cursorUsageEnabled")
+                    if !enabled {
+                        withAnimation(.spring(response: 0.25, dampingFraction: 0.82)) {
+                            page = .overview
+                        }
+                        if dockProvider != .codex {
+                            dockProvider = .codex
+                            monitor.writeSetting(CodexDockProvider.codex.title, key: "dockProvider")
+                        }
+                    }
+                }
+
+                if cursorUsageEnabled {
+                    CodexGlassDivider()
+                HStack(spacing: 8) {
+                    CodexProviderIcon(brand: .cursor, size: 12, color: cursorAccent)
+                        .frame(width: 16)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(monitor.cursorUsage?.accountEmail
+                            ?? CodexLocalization.text("Cursor.app 本地登录", "Cursor.app local login"))
+                            .font(.system(size: 10.5, weight: .semibold))
+                            .lineLimit(1)
+                        Text(monitor.cursorUsageError
+                            ?? monitor.cursorUsage?.displayPlan
+                            ?? CodexLocalization.text("等待检测", "Waiting for detection"))
+                            .font(.system(size: 8, weight: .medium))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                    Spacer(minLength: 4)
+                    Circle()
+                        .fill(cursorIsHealthy
+                            ? CodexPalette.green(for: appearance)
+                            : CodexPalette.yellow(for: appearance))
+                        .frame(width: 7, height: 7)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+
+                CodexGlassDivider()
+                Button {
+                    withAnimation(.spring(response: 0.25, dampingFraction: 0.82)) {
+                        page = .cursor
+                    }
+                } label: {
+                    settingProviderActionRow(
+                        CodexLocalization.text("打开 Cursor 面板", "Open Cursor panel"),
+                        brand: .cursor,
+                        accent: cursorAccent
+                    )
+                }
+                .buttonStyle(.plain)
+
+                CodexGlassDivider()
+                Button { monitor.refreshCursor() } label: {
+                    settingActionRow(
+                        CodexLocalization.text("立即刷新 Cursor", "Refresh Cursor now"),
+                        symbol: "arrow.clockwise",
+                        trailing: monitor.isRefreshingCursor
+                            ? CodexLocalization.text("更新中…", "Updating…")
+                            : nil
+                    )
+                }
+                .buttonStyle(.plain)
+                .disabled(monitor.isRefreshingCursor)
+
+                CodexGlassDivider()
+                Button { open("https://cursor.com/dashboard?tab=usage") } label: {
+                    settingActionRow(
+                        CodexLocalization.text("Cursor 用量仪表盘", "Cursor usage dashboard"),
+                        symbol: "chart.bar.xaxis"
+                    )
+                }
+                .buttonStyle(.plain)
+
+                Text(CodexLocalization.text(
+                    "只读 Cursor.app 的 state.vscdb 登录令牌并直接请求 cursor.com；令牌不会写入组件缓存。",
+                    "Reads the Cursor.app state.vscdb login token read-only and calls cursor.com directly. The token is never written to widget caches."
+                ))
+                    .font(.system(size: 8.5, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                } else {
+                    Text(CodexLocalization.text(
+                        "关闭后不会读取或请求 Cursor 数据；额度页与 Dock 仅显示 Codex。",
+                        "When disabled, Cursor data is not read or requested; quota pages and the Dock show Codex only."
+                    ))
+                        .font(.system(size: 8.5, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 8)
+                }
+            }
+
+            dataHealthSection
+
+            #if CODEX_USAGE_TESTING
+            if !UserDefaults.standard.bool(forKey: "codexUsage.testing.releaseUpdatesFirst") {
+                releaseUpdatesSettingsSection
+            }
+            #else
+            releaseUpdatesSettingsSection
+            #endif
+
             VStack(alignment: .leading, spacing: 7) {
                 codexSectionLabel(CodexLocalization.text("登录与隐私", "LOGIN & PRIVACY"))
                 Label {
-                    Text(CodexLocalization.text(
-                        "额度可通过 OAuth API 或本机 Codex CLI 读取；本地统计只读取会话中的 token_count/模型字段，不读取或缓存提示词，缓存不包含访问 Token。",
-                        "Quota can be read through the OAuth API or local Codex CLI. Local statistics read only token_count and model fields, never prompts; caches contain no access tokens."
-                    ))
+                    Text(cursorUsageEnabled
+                        ? CodexLocalization.text(
+                            "Codex 额度通过 OAuth API 或本机 CLI 读取；Cursor 只读 Cursor.app 本地登录。统计缓存不读取提示词，也不包含任何访问 Token。",
+                            "Codex quota comes from OAuth API or the local CLI; Cursor uses the Cursor.app login read-only. Analytics caches never read prompts or contain access tokens."
+                        )
+                        : CodexLocalization.text(
+                            "Codex 额度通过 OAuth API 或本机 CLI 读取；Cursor 数据统计已关闭。统计缓存不读取提示词，也不包含任何访问 Token。",
+                            "Codex quota comes from OAuth API or the local CLI; Cursor analytics is disabled. Analytics caches never read prompts or contain access tokens."
+                        ))
                         .fixedSize(horizontal: false, vertical: true)
                 } icon: {
                     Image(systemName: "lock.shield.fill").foregroundStyle(theme.primary)
@@ -3122,6 +3544,8 @@ struct CodexUsageMonitorPanel: View {
         withAnimation(.easeInOut(duration: 0.18)) {
             panelCardConfiguration = configuration
             if page != .settings,
+               page != .codex,
+               page != .cursor,
                !configuration.visiblePages.map(\.panelPage).contains(page) {
                 page = configuration.visiblePages.first?.panelPage ?? .settings
             }
@@ -3130,32 +3554,47 @@ struct CodexUsageMonitorPanel: View {
     }
 
     private var dataHealthSection: some View {
-        let healthyCount = [
+        let baseHealthyCount = [
             monitor.usage != nil,
             monitor.accountInsights?.officialUsage != nil,
             monitor.recentUsage != nil,
             monitor.recentUsage?.pricingSource != nil,
             monitor.serviceStatus != nil,
         ].filter { $0 }.count
+        let includesCursor = cursorDataSourceIsConfigured
+        let includesExchangeRates = displayCurrency != .usd
+        let exchangeRatesHealthy = monitor.exchangeRates?.usdMultiplier(to: displayCurrency) != nil
+        let healthyCount = baseHealthyCount
+            + (includesCursor && cursorIsHealthy ? 1 : 0)
+            + (includesExchangeRates && exchangeRatesHealthy ? 1 : 0)
+        let sourceCount = 5 + (includesCursor ? 1 : 0) + (includesExchangeRates ? 1 : 0)
+        var sourceNames = CodexLocalization.isChinese
+            ? ["额度"]
+            : ["Quota"]
+        if includesCursor { sourceNames.append("Cursor") }
+        if includesExchangeRates {
+            sourceNames.append(CodexLocalization.text("每日汇率", "daily FX"))
+        }
+        sourceNames.append(contentsOf: CodexLocalization.isChinese
+            ? ["官方活动", "本地日志", "价格", "服务状态"]
+            : ["official activity", "local logs", "pricing", "service status"])
+        let sourceDescription = sourceNames.joined(separator: CodexLocalization.isChinese ? "、" : ", ")
 
         return settingsSection(CodexLocalization.text("数据健康", "DATA HEALTH")) {
             HStack(spacing: 8) {
-                Image(systemName: healthyCount == 5
+                Image(systemName: healthyCount == sourceCount
                     ? "checkmark.seal.fill"
                     : "exclamationmark.triangle.fill")
-                    .foregroundStyle(healthyCount == 5
+                    .foregroundStyle(healthyCount == sourceCount
                         ? CodexPalette.green(for: appearance)
                         : CodexPalette.yellow(for: appearance))
                 VStack(alignment: .leading, spacing: 2) {
                     Text(CodexLocalization.text(
-                        "\(healthyCount)/5 个数据源正常",
-                        "\(healthyCount)/5 data sources healthy"
+                        "\(healthyCount)/\(sourceCount) 个数据源正常",
+                        "\(healthyCount)/\(sourceCount) data sources healthy"
                     ))
                         .font(.system(size: 10.5, weight: .semibold))
-                    Text(CodexLocalization.text(
-                        "额度、官方活动、本地日志、价格与服务状态",
-                        "Quota, official activity, local logs, pricing, and service status"
-                    ))
+                    Text(sourceDescription)
                         .font(.system(size: 8))
                         .foregroundStyle(.secondary)
                 }
@@ -3175,6 +3614,31 @@ struct CodexUsageMonitorPanel: View {
                 date: monitor.usage?.fetchedAt,
                 healthy: monitor.usage != nil
             )
+            if includesCursor {
+                CodexGlassDivider()
+                dataHealthRow(
+                    brand: .cursor,
+                    title: "Cursor",
+                    detail: monitor.cursorUsageError
+                        ?? monitor.cursorUsage?.displayPlan
+                        ?? CodexLocalization.text("等待检测", "Waiting for detection"),
+                    date: monitor.cursorUsage?.fetchedAt,
+                    healthy: cursorIsHealthy
+                )
+            }
+            if includesExchangeRates {
+                CodexGlassDivider()
+                dataHealthRow(
+                    symbol: "coloncurrencysign.circle",
+                    title: CodexLocalization.text("每日汇率", "Daily exchange rates"),
+                    detail: monitor.exchangeRates.map {
+                        "ECB · \($0.publishedDate) · USD→\(displayCurrency.rawValue)"
+                    } ?? monitor.exchangeRateError
+                        ?? CodexLocalization.text("等待欧洲央行", "Waiting for ECB"),
+                    date: monitor.exchangeRates?.fetchedAt,
+                    healthy: exchangeRatesHealthy
+                )
+            }
             CodexGlassDivider()
             dataHealthRow(
                 symbol: "checkmark.seal",
@@ -3212,18 +3676,43 @@ struct CodexUsageMonitorPanel: View {
         }
     }
 
+    private var cursorDataSourceIsConfigured: Bool {
+        cursorUsageEnabled && (monitor.cursorUsage != nil || FileManager.default.fileExists(
+            atPath: NSHomeDirectory()
+                + "/Library/Application Support/Cursor/User/globalStorage/state.vscdb"
+        ))
+    }
+
+    private var cursorIsHealthy: Bool {
+        cursorUsageEnabled && monitor.cursorUsage != nil && monitor.cursorUsageError == nil
+    }
+
+    private var codexIsHealthy: Bool {
+        monitor.usage != nil && monitor.usageError == nil
+    }
+
     private func dataHealthRow(
-        symbol: String,
+        symbol: String? = nil,
+        brand: CodexProviderBrand? = nil,
         title: String,
         detail: String,
         date: Date?,
         healthy: Bool
     ) -> some View {
         HStack(spacing: 8) {
-            Image(systemName: symbol)
-                .font(.system(size: 9, weight: .semibold))
-                .foregroundStyle(healthy ? theme.primary : CodexPalette.yellow(for: appearance))
+            if let brand {
+                CodexProviderIcon(
+                    brand: brand,
+                    size: 11,
+                    color: healthy ? theme.primary : CodexPalette.yellow(for: appearance)
+                )
                 .frame(width: 17)
+            } else if let symbol {
+                Image(systemName: symbol)
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(healthy ? theme.primary : CodexPalette.yellow(for: appearance))
+                    .frame(width: 17)
+            }
             VStack(alignment: .leading, spacing: 1) {
                 Text(title)
                     .font(.system(size: 9.5, weight: .semibold))
@@ -3357,6 +3846,25 @@ struct CodexUsageMonitorPanel: View {
         .contentShape(Rectangle())
     }
 
+    private func settingProviderActionRow(
+        _ label: String,
+        brand: CodexProviderBrand,
+        accent: Color
+    ) -> some View {
+        HStack(spacing: 8) {
+            CodexProviderIcon(brand: brand, size: 11, color: accent)
+                .frame(width: 16)
+            Text(label).font(.system(size: 11, weight: .medium))
+            Spacer()
+            Image(systemName: "chevron.right")
+                .font(.system(size: 8, weight: .semibold))
+                .foregroundStyle(.tertiary)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .contentShape(Rectangle())
+    }
+
     private func codexSectionLabel(_ text: String) -> some View {
         Text(text.uppercased())
             .font(.system(size: 9, weight: .semibold))
@@ -3405,7 +3913,7 @@ struct CodexUsageMonitorPanel: View {
     }
 
     private func formatUSD(_ value: Double) -> String {
-        String(format: "$%.2f", value)
+        currencyContext.formatUSD(value)
     }
 
     private func formatEstimatedUSD(
@@ -3466,6 +3974,20 @@ struct CodexUsageMonitorPanel: View {
             widgetId: widgetId,
             default: CodexDisplayLimit.weekly.title
         ))
+        dockProvider = CodexDockProvider.resolve(title: WidgetDefaults.string(
+            key: "dockProvider",
+            widgetId: widgetId,
+            default: CodexDockProvider.codex.title
+        ))
+        cursorUsageEnabled = WidgetDefaults.bool(
+            key: "cursorUsageEnabled",
+            widgetId: widgetId,
+            default: true
+        )
+        if !cursorUsageEnabled {
+            dockProvider = .codex
+            if page == .codex || page == .cursor { page = .overview }
+        }
         displayMetric = CodexDisplayMetric.resolve(title: WidgetDefaults.string(
             key: "displayMetric",
             widgetId: widgetId,
@@ -3492,6 +4014,11 @@ struct CodexUsageMonitorPanel: View {
             widgetId: widgetId,
             default: CodexTokenFormat.automatic.title
         ))
+        displayCurrency = CodexCurrency.resolve(title: WidgetDefaults.string(
+            key: "displayCurrency",
+            widgetId: widgetId,
+            default: CodexCurrency.usd.title
+        ))
         hourlyActivityRange = CodexHourlyActivityRange.resolve(title: WidgetDefaults.string(
             key: "hourlyActivityRange",
             widgetId: widgetId,
@@ -3501,6 +4028,8 @@ struct CodexUsageMonitorPanel: View {
         let loadedPanelCardConfiguration = CodexPanelCardConfiguration.load(widgetId: widgetId)
         panelCardConfiguration = loadedPanelCardConfiguration
         if page != .settings,
+           page != .codex,
+           page != .cursor,
            !loadedPanelCardConfiguration.visiblePages.map(\.panelPage).contains(page) {
             page = loadedPanelCardConfiguration.visiblePages.first?.panelPage ?? .settings
         }
@@ -3544,9 +4073,52 @@ struct CodexUsageMonitorPanel: View {
         return quotaUsageSource.sourceLabel
     }
 
+    private var exchangeRateStatusText: String {
+        if monitor.isRefreshingExchangeRates {
+            return CodexLocalization.text(
+                "正在更新欧洲央行每日参考汇率…",
+                "Updating ECB daily reference rates…"
+            )
+        }
+        if let snapshot = monitor.exchangeRates,
+           let multiplier = snapshot.usdMultiplier(to: displayCurrency)
+        {
+            let rate = String(format: multiplier >= 100 ? "%.2f" : "%.4f", multiplier)
+            let cached = monitor.exchangeRateError == nil
+                ? ""
+                : CodexLocalization.text(" · 使用最近缓存", " · using latest cache")
+            return CodexLocalization.text(
+                "欧洲央行 \(snapshot.publishedDate) · 1 USD = \(rate) \(displayCurrency.rawValue)\(cached)",
+                "ECB \(snapshot.publishedDate) · 1 USD = \(rate) \(displayCurrency.rawValue)\(cached)"
+            )
+        }
+        if let error = monitor.exchangeRateError {
+            return CodexLocalization.text(
+                "\(error)；暂时继续显示美元。",
+                "\(error) Showing USD until a rate is available."
+            )
+        }
+        return CodexLocalization.text(
+            "等待欧洲央行每日参考汇率；获取前暂时显示美元。",
+            "Waiting for ECB daily reference rates; showing USD until available."
+        )
+    }
+
     private func open(_ urlString: String) {
         guard let url = URL(string: urlString) else { return }
         NSWorkspace.shared.open(url)
+    }
+
+    private func openCursorApp() {
+        let cursorURL = URL(fileURLWithPath: "/Applications/Cursor.app")
+        guard FileManager.default.fileExists(atPath: cursorURL.path) else {
+            open("https://cursor.com/downloads")
+            return
+        }
+        NSWorkspace.shared.openApplication(
+            at: cursorURL,
+            configuration: NSWorkspace.OpenConfiguration()
+        )
     }
 
     private func openConversation(_ conversation: CodexRecentConversation) {
@@ -3996,6 +4568,8 @@ private final class CodexFirstMouseButton: NSButton {
 
 private enum CodexPanelPage: Hashable {
     case overview
+    case codex
+    case cursor
     case insights
     case work
     case status
@@ -4068,6 +4642,7 @@ private struct CodexConversationRow: View {
     let onHoverChange: (Bool) -> Void
     let action: () -> Void
 
+    @Environment(\.codexCurrencyContext) private var currencyContext
     @State private var isHovered = false
 
     private var icon: String {
@@ -4222,9 +4797,7 @@ private struct CodexConversationRow: View {
 
     private func compactCost(_ usage: CodexSessionUsageSummary) -> String {
         guard let value = usage.estimatedCostUSD else { return "—" }
-        let formatted = value >= 10
-            ? String(format: "$%.1f", value)
-            : String(format: "$%.2f", value)
+        let formatted = currencyContext.formatUSD(value)
         return (usage.costCoverage?.isComplete ?? true) ? formatted : "~\(formatted)"
     }
 }
@@ -4331,7 +4904,7 @@ private struct CodexPaceTip: View {
     }
 }
 
-private struct CodexFooterActionHover: ViewModifier {
+struct CodexFooterActionHover: ViewModifier {
     let testingID: String
     let help: String
     let accent: Color

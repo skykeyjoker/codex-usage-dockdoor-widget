@@ -4,7 +4,9 @@
 
 The quota-source selection and CLI RPC behavior, OAuth usage field mapping,
 credential refresh flow, local token-log aggregation, models.dev price refresh,
-long-context/Priority/cache pricing behavior, and OpenAI status grouping were
+long-context/Priority/cache pricing behavior, OpenAI status grouping,
+Cursor.app read-only authentication and usage endpoint mappings, and the
+Codex/Cursor provider SVG templates were
 adapted from [CodexBar](https://github.com/steipete/CodexBar), copyright 2026
 Peter Steinberger, under the MIT License. The complete license text is kept in
 [`CodexUsageMonitor/CODEXBAR_LICENSE.txt`](CodexUsageMonitor/CODEXBAR_LICENSE.txt).

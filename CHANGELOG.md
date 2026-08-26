@@ -1,6 +1,42 @@
 # Changelog
 
-## Unreleased
+## 2.1.0 - 2026-08-26
+
+- Added Cursor as a second provider, using the existing Cursor.app session in
+  read-only mode to show account/plan details, Total/Cursor/Third Party/Grok
+  Bot quota windows, on-demand usage, 30-day Token/cost activity, and top
+  models.
+- Added a Codex/Cursor switch in the Panel and a Dock-provider setting for
+  one-, two-, and three-slot layouts.
+- Expanded the quota switcher to Overview/Codex/Cursor. Overview combines
+  30-day spend and Token totals with compact quota and usage cards for both
+  providers.
+- Replaced approximate SF Symbols with the official Codex and Cursor provider
+  marks used by CodexBar, rendered from embedded vector SVG templates.
+- Matched the Cursor footer actions to the Codex footer's 22-point hit area,
+  animated hover treatment, tooltips, and visible last-updated timestamp.
+- Added pointer-following Cursor daily-usage details with exact Token, cache,
+  request, API-equivalent cost, and metered-cost values.
+- Added a Cursor analytics switch. Disabling it cancels Cursor refreshes,
+  removes the provider tabs, excludes Cursor from data health, and keeps the
+  quota page and Dock on Codex only.
+- Reorganized Settings to Refresh, Codex, then Cursor; moved quota-source
+  selection and Codex links into the Codex section.
+- Added a shared display-currency setting for USD, CNY, EUR, GBP, JPY, HKD,
+  KRW, CAD, AUD, SGD, and CHF. Non-USD values use cached ECB daily reference
+  rates across Codex, Cursor, aggregate, project, model, and task costs.
+- Added pointer-following details to both compact charts on the combined
+  Overview page, including Token composition, cache, requests, converted API
+  cost, and Cursor metered cost.
+- Added a combined Codex + Cursor Dock mode. One slot uses an outer Codex and
+  inner Cursor quota track; two slots add provider rows; three slots add each
+  reset time and combined health. The fixed dual-track presentation suppresses
+  ring-style carousel changes until a single provider is selected again.
+- Aligned combined-mode rings with Personal Token's visible footprint in all
+  slot sizes: `0.85 × dim` for one slot and `0.82 × dim` for wider layouts.
+- Replaced truncated Codex/Cursor row labels in two- and three-slot combined
+  layouts with larger official provider marks, preserving full-width values,
+  reset times, and progress bars.
 
 ## 2.0.0 - 2026-08-18
 

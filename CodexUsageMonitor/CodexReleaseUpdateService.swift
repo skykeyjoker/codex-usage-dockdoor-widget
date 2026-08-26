@@ -20,7 +20,7 @@ struct CodexReleaseUpdateSnapshot: Codable, Equatable, Sendable {
 }
 
 struct CodexReleaseUpdateService: Sendable {
-    static let currentVersion = "2.0.0"
+    static let currentVersion = "2.1.0"
     static let repositoryURL = "https://github.com/skykeyjoker/codex-usage-dockdoor-widget"
     static let latestReleaseURL = repositoryURL + "/releases/latest"
 

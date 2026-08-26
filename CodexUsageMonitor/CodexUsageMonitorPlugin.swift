@@ -7,8 +7,8 @@ final class CodexUsageMonitorPlugin: WidgetPlugin, DockDoorWidgetProvider {
     var iconSymbol: String { "terminal.fill" }
     var widgetDescription: String {
         CodexLocalization.text(
-            "Codex 额度、最近 Token 用量、最近任务及 ChatGPT/Codex 服务状态。",
-            "Codex quota, recent token usage, recent tasks, and ChatGPT/Codex service status."
+            "Codex 与可选 Cursor 额度、Token 用量、任务及服务状态。",
+            "Codex and optional Cursor quota, token usage, tasks, and service status."
         )
     }
     var supportedOrientations: [WidgetOrientation] { [.horizontal, .vertical] }
@@ -18,6 +18,17 @@ final class CodexUsageMonitorPlugin: WidgetPlugin, DockDoorWidgetProvider {
     func settingsSchema() -> [WidgetSetting] {
         normalizeStoredPickerSettings()
         return [
+            .toggle(
+                key: "cursorUsageEnabled",
+                label: CodexLocalization.text("启用 Cursor 数据统计", "Enable Cursor Analytics"),
+                defaultValue: true
+            ),
+            .picker(
+                key: "dockProvider",
+                label: CodexLocalization.text("Dock 服务", "Dock Provider"),
+                options: CodexDockProvider.allCases.map(\.title),
+                defaultValue: CodexDockProvider.codex.title
+            ),
             .picker(
                 key: "displayLimit",
                 label: CodexLocalization.text("Dock 额度", "Dock Quota"),
@@ -32,7 +43,7 @@ final class CodexUsageMonitorPlugin: WidgetPlugin, DockDoorWidgetProvider {
             ),
             .picker(
                 key: "ringStyle",
-                label: CodexLocalization.text("圆环样式", "Ring Style"),
+                label: CodexLocalization.text("圆环样式（单源）", "Ring Style (Single Provider)"),
                 options: CodexRingStyle.allCases.map(\.title),
                 defaultValue: CodexRingStyle.concentric.title
             ),
@@ -59,6 +70,12 @@ final class CodexUsageMonitorPlugin: WidgetPlugin, DockDoorWidgetProvider {
                 label: CodexLocalization.text("Panel Token 格式", "Panel Token Format"),
                 options: CodexTokenFormat.allCases.map(\.title),
                 defaultValue: CodexTokenFormat.automatic.title
+            ),
+            .picker(
+                key: "displayCurrency",
+                label: CodexLocalization.text("Panel 货币单位", "Panel Currency"),
+                options: CodexCurrency.allCases.map(\.title),
+                defaultValue: CodexCurrency.usd.title
             ),
             .picker(
                 key: "hourlyActivityRange",
@@ -121,6 +138,10 @@ final class CodexUsageMonitorPlugin: WidgetPlugin, DockDoorWidgetProvider {
             let normalized = CodexDisplayLimit.resolve(title: value).title
             if value != normalized { defaults.set(normalized, forKey: prefix + "displayLimit") }
         }
+        if let value = defaults.string(forKey: prefix + "dockProvider") {
+            let normalized = CodexDockProvider.resolve(title: value).title
+            if value != normalized { defaults.set(normalized, forKey: prefix + "dockProvider") }
+        }
         if let value = defaults.string(forKey: prefix + "displayMetric") {
             let normalized = CodexDisplayMetric.resolve(title: value).title
             if value != normalized { defaults.set(normalized, forKey: prefix + "displayMetric") }
@@ -144,6 +165,10 @@ final class CodexUsageMonitorPlugin: WidgetPlugin, DockDoorWidgetProvider {
         if let value = defaults.string(forKey: prefix + "tokenFormat") {
             let normalized = CodexTokenFormat.resolve(title: value).title
             if value != normalized { defaults.set(normalized, forKey: prefix + "tokenFormat") }
+        }
+        if let value = defaults.string(forKey: prefix + "displayCurrency") {
+            let normalized = CodexCurrency.resolve(title: value).title
+            if value != normalized { defaults.set(normalized, forKey: prefix + "displayCurrency") }
         }
         if let value = defaults.string(forKey: prefix + "hourlyActivityRange") {
             let normalized = CodexHourlyActivityRange.resolve(title: value).title

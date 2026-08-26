@@ -21,6 +21,7 @@ struct CodexLocalInsightsView: View {
     let hourlyActivityRange: CodexHourlyActivityRange
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.codexCurrencyContext) private var currencyContext
     @State private var period: Period = .sevenDays
     @State private var hoveredMetric: String?
     @State private var hoveredModel: String?
@@ -1091,13 +1092,7 @@ struct CodexLocalInsightsView: View {
 
     private func currency(_ value: Double?) -> String {
         guard let value else { return "—" }
-        if value >= 100 {
-            return String(format: "$%.0f", value)
-        }
-        if value >= 10 {
-            return String(format: "$%.1f", value)
-        }
-        return String(format: "$%.2f", value)
+        return currencyContext.formatUSD(value)
     }
 
     private func estimatedCostText(

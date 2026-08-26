@@ -3,36 +3,33 @@
 An unofficial, feature-rich Codex usage widget for
 [DockDoor Pro](https://dockdoor.net/). It brings quota, activity, local Token
 analytics, projects/tasks, context health, and OpenAI service status into the
-Dock and a native SwiftUI panel.
+Dock and a native SwiftUI panel. It can also read an existing Cursor.app
+session to show Cursor quota and aggregate usage alongside Codex.
 
 > This widget is distributed independently and is not part of the DockDoor Pro
 > marketplace. Installation is manual.
 
-## What's new in 1.1.2
+## What's new in 2.1.0
 
-- The one-slot quota ring now uses the same full-size footprint as the
-  Pomodoro widget for better Dock readability.
-- The service-status dot now follows the ring edge and uses the subtler
-  low-contrast outline from the Pomodoro widget.
+- Added Cursor as an optional second provider with account, plan, Total/Cursor/
+  Third Party/Grok Bot quota, on-demand usage, 30-day Token/cost activity, and
+  model details from the existing Cursor.app session.
+- Added Overview/Codex/Cursor Panel navigation and a combined 30-day spend and
+  quota overview with pointer-following chart details.
+- Added Codex, Cursor, and combined Dock modes. Combined mode uses an adaptive
+  dual-track ring across one-, two-, and three-slot horizontal/vertical layouts.
+- Added USD, CNY, EUR, GBP, JPY, HKD, KRW, CAD, AUD, SGD, and CHF display
+  currencies using cached ECB working-day reference rates.
+- Added official provider marks, clearer Settings sections, a Cursor analytics
+  switch, stronger data-health reporting, and consistent footer hover actions.
 
-## 1.1.1 highlights
+## 2.0.0 highlights
 
-- Two- and three-slot Dock layouts now provide clearer separation between the
-  quota ring and the adjacent percentage, reset, and service-status metrics.
-
-## 1.1.0 highlights
-
-- Choose **Simplified**, **Full**, or **Custom** Panel content. Individual
-  pages and cards can be hidden, and cards can be reordered within each page.
-- Format Token values automatically, exactly, in millions, or in billions.
-- Add an optional bottom quick-launch bar for **GPT Classic**, **Codex
-  Desktop**, and **Codex CLI**, with per-button visibility and a selectable
-  terminal.
-- Codex CLI conversations are identified from local session metadata and can
-  be resumed in the selected terminal; Desktop conversations continue to open
-  in Codex Desktop.
-- Smoother conversation-hover metrics, more readable two-/three-slot Dock
-  layouts, and consistent native glass cards across the Panel.
+- Added configurable Panel presets and per-page/per-card visibility and order.
+- Added All-time local analytics, hourly activity, projects/tasks, context
+  health, task efficiency, GitHub update monitoring, and quick launch actions.
+- Migrated local aggregation to an incremental SQLite WAL cache and expanded
+  models.dev pricing, coverage, Fast/Priority, cache, and long-context support.
 
 <p align="center">
   <img src="assets/dock-layouts.png" width="740" alt="One-, two-, and three-slot Dock layouts">
@@ -40,6 +37,15 @@ Dock and a native SwiftUI panel.
 
 ## Highlights
 
+- Overview/Codex/Cursor switch in the Panel: the Overview tab combines both
+  providers' 30-day spend, Token totals, quota, usage trend, and top model.
+- Official Codex and Cursor vector marks, plus configurable Codex, Cursor, or
+  combined quota presentation for all three Dock slot sizes.
+- Optional combined Dock presentation with a Codex outer track and Cursor
+  inner track, expanding to provider rows and independent reset times in wider
+  slot sizes.
+- Cursor account and plan, Total/Cursor/Third Party/Grok Bot quota windows,
+  on-demand usage, 30-day Token and cost summaries, daily chart, and top models.
 - One-, two-, and three-slot Dock layouts, including classic, concentric,
   segmented, and automatically rotating single-slot rings.
 - Session and weekly quota with used/remaining modes, reset time, pace hints,
@@ -122,6 +128,8 @@ diagnostics.
   Pro 1.1.2.
 - A current [Codex CLI](https://learn.chatgpt.com/docs/codex/cli) installation.
 - For quota and account activity, sign in with Codex first.
+- Cursor data is optional. To enable it, install Cursor.app and sign in there;
+  the widget reads that existing local session without modifying it.
 - Xcode Command Line Tools are needed only when building from source.
 
 ## Install a release
@@ -187,12 +195,15 @@ The script rejects a bundle unless its executable contains both `arm64` and
 
 | Setting | Choices | Effect |
 | --- | --- | --- |
+| Cursor analytics | On / Off | Enables Cursor.app authentication and Cursor network refreshes. Off removes multi-provider tabs and keeps quota surfaces on Codex only. |
+| Dock provider | Codex / Cursor / Codex + Cursor | Selects one provider or the adaptive dual-track presentation. Combined mode requires Cursor analytics. |
 | Primary quota | Weekly / Session | Selects the quota shown in the Dock. |
 | Value | Remaining / Used | Selects percentage semantics. |
-| Ring Style | Classic / Concentric / Segmented / Auto Carousel | Changes the visualization across one-, two-, and three-slot layouts. |
+| Ring Style | Classic / Concentric / Segmented / Auto Carousel | Changes single-provider layouts. Combined mode uses a fixed dual-track ring and temporarily suppresses style/carousel changes. |
 | Theme | System Accent, Codex Teal, Ocean, Violet, Blue Magenta, Mint, Sunset | Applies adaptive light/dark highlights. |
 | Show service status | On / Off | Adds the current OpenAI health indicator to the Dock. |
 | Token format | Automatic / Exact / Millions (2 decimals) / Millions (1 decimal) / Billions (2 decimals) | Controls Token-number rounding throughout the Panel. |
+| Display currency | USD / CNY / EUR / GBP / JPY / HKD / KRW / CAD / AUD / SGD / CHF | Converts USD-denominated estimates throughout the Panel using the latest cached ECB working-day reference rates. |
 | Hourly activity range | This week / Last year | Switches both the heatmap data and its range label; defaults to This week. |
 | Panel content preset | Simplified / Full / Custom | Applies a compact default, shows every card, or preserves individual choices. |
 | Page visibility | Quota overview / Usage insights / Projects & tasks / OpenAI status | Hides entire content pages while keeping at least one page available. |
@@ -221,6 +232,8 @@ however, use the following local and remote sources to provide its features.
 
 | Source | Data used | Purpose | Network behavior |
 | --- | --- | --- | --- |
+| `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb` | Existing Cursor.app access Token | Establishes the same Cursor web session already used by Cursor.app | Opened read-only through SQLite. The Token is held only for the request and is never copied into widget preferences or caches. |
+| `https://cursor.com/api/usage-summary`, `/api/auth/me`, `/api/usage`, and Cursor dashboard usage endpoints | Cursor plan, quota windows, on-demand usage, aggregate Token counts, models, and cost fields | Cursor Panel and optional Cursor Dock presentation | Authenticated directly with the existing Cursor.app session. No prompt, source code, or tool output is requested or sent by the widget. Cursor endpoints are not public versioned APIs and may change without notice. |
 | `~/.codex/auth.json` (or `$CODEX_HOME/auth.json`) | Existing access/identity Token and account ID | OAuth quota, reset credits, account email/plan | Read-only. The widget never refreshes or writes Codex credentials; Automatic mode falls back to CLI RPC when OAuth is stale. |
 | Local `codex app-server` in read-only/untrusted mode | `account/read`, `account/rateLimits/read`, `account/usage/read` aggregate responses | CLI quota source, credits, official activity | The widget communicates with a local Codex process over stdin/stdout. |
 | `~/.codex/sessions` and `~/.codex/archived_sessions` | Token counts, model/service tier, timestamps, turn/session IDs, project path, context and timing metadata | Local usage, projects, task efficiency, context health | Read locally; this widget does not upload these logs. |
@@ -230,6 +243,7 @@ however, use the following local and remote sources to provide its features.
 | `https://chatgpt.com/backend-api/wham/rate-limit-reset-credits` | Reset-credit count and expiry | Reset-credit card | Bearer-authenticated direct request to OpenAI. |
 | `https://chatgpt.com/backend-api/accounts/{account}/spend-controls/current-user/monthly-usage` | Administrator monthly usage and limit | Business/Team/EDU/Enterprise monthly quota fallback | Bearer-authenticated direct request to OpenAI for eligible workspace plans. |
 | `https://models.dev/api.json` | Public model price catalog | API-equivalent cost estimates | Anonymous request; bundled prices are the fallback. |
+| `https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml` | Official daily EUR reference rates | Converts USD-denominated estimates to the selected display currency | Anonymous request only when a non-USD currency is selected. Checked at most every 12 hours and cached locally; no quota or usage data is sent. |
 | `https://status.openai.com` | Overall and component status | ChatGPT/Codex service-status page and Dock indicator | Anonymous request. |
 | GitHub Releases API and `/releases/latest` redirect | Latest stable tag, name, URL, and publish time when available | Optional release-update reminder in Settings | Anonymous request, enabled by default and throttled to at most once every 12 hours. The redirect is the API rate-limit fallback; no local widget data is sent. |
 
@@ -241,6 +255,8 @@ source.
 
 - No analytics, crash reporting, telemetry, or custom server is included.
 - OAuth access and refresh Tokens are never copied into widget caches.
+- Cursor.app access Tokens are read only when refreshing Cursor data and are
+  never copied into widget caches or DockDoor Pro preferences.
 - Local usage aggregation parses only metadata needed for counts, pricing,
   project/task metrics, and context health. It does not retain prompt or tool
   output bodies.
@@ -284,6 +300,10 @@ removes unrelated DockDoor Pro settings, so it is not recommended.
 ## Accuracy notes
 
 - Displayed cost is an **API-equivalent estimate, not a subscription bill**.
+- Currency conversion is display-only. Source costs remain stored in USD; the
+  Panel converts them with the latest successfully cached ECB reference rates.
+  ECB normally publishes new rates on working days, so weekends and TARGET
+  closing days retain the latest published business-day rate.
 - Pricing applies model-specific input, output, cache read/write,
   long-context, and Fast/Priority rules when the required metadata is present.
 - `models.dev` is preferred; a built-in OpenAI price table is the fallback.
@@ -312,6 +332,13 @@ removes unrelated DockDoor Pro settings, so it is not recommended.
 - Run `codex` in Terminal and sign in.
 - In Settings, try **Quota usage source → CLI (RPC)**.
 - Update Codex CLI if `account/rateLimits/read` is unavailable.
+
+### Cursor quota is unavailable
+
+- Open Cursor.app and confirm that it is signed in.
+- In the Panel, switch to **Cursor** and choose **Refresh Cursor**.
+- If Cursor recently changed accounts, restart Cursor.app so its local session
+  database is current. The widget does not launch a separate sign-in flow.
 
 ### Official activity is unavailable
 

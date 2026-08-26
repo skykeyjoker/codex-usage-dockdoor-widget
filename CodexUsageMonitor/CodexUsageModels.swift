@@ -1017,6 +1017,28 @@ enum CodexDisplayLimit: String, CaseIterable, Identifiable {
     }
 }
 
+enum CodexDockProvider: String, CaseIterable, Identifiable {
+    case codex
+    case cursor
+    case both
+
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .codex: "Codex"
+        case .cursor: "Cursor"
+        case .both: CodexLocalization.text("同时展示", "Codex + Cursor")
+        }
+    }
+
+    static func resolve(title: String) -> CodexDockProvider {
+        if ["both", "同时展示", "Codex + Cursor", "Both"].contains(title) {
+            return .both
+        }
+        return allCases.first { title == $0.rawValue || title == $0.title } ?? .codex
+    }
+}
+
 enum CodexDisplayMetric: String, CaseIterable, Identifiable {
     case remaining
     case used

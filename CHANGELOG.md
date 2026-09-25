@@ -1,5 +1,18 @@
 # Changelog
 
+## 2.6.0 - 2026-09-25
+
+This release combines the local 2.2–2.6 iterations into the first public release after 2.1.0.
+
+- Add Claude Code subscription quota, account email/plan, scoped weekly limits, exact reset dates and independent refresh/error handling with read-only credentials.
+- Add Claude local token/cost history and today / 7-day / 30-day insights with daily trends, hourly activity, token composition, request counts, models and cost coverage; handle duplicate/cumulative records and mixed cache-write TTLs.
+- Replace Dock rings with consistent provider bars/cards and add a wide three-provider quota Overview. Include Cursor on-demand usage in both quota Overview and details.
+- Adapt quota, insights, projects and status height to content and screen limits with smooth transitions. Keep native popup/background placement entirely under DockDoor's control to avoid blank space and coordinate drift.
+- Add unified OpenAI / Claude / Cursor status cards, visible fault/unknown states, expandable normal-service lists and health-source diagnostics.
+- Add Claude / Cursor project and conversation metadata, current/legacy Cursor index compatibility, Claude resume-command copying, Cursor project opening and saved context/code-change statistics.
+- Add Cursor official 30-day activity insights and distinguish failed, empty and partial event fetches. Explain unsupported Claude personal-plan official analytics and local-only Cursor metadata limits.
+- Extend settings/card visibility and add regression tests, light/dark previews, live-data probes and universal build validation.
+
 ## 2.1.0 - 2026-08-26
 
 - Added Cursor as a second provider, using the existing Cursor.app session in

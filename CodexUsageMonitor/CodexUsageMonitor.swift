@@ -22,9 +22,23 @@ final class CodexUsageMonitor: ObservableObject {
     @Published private(set) var usage: CodexUsageSnapshot?
     @Published private(set) var recentUsage: CodexRecentUsageSnapshot?
     @Published private(set) var recentConversations: CodexConversationSnapshot?
+    @Published private(set) var providerStatuses: [UsageProvider: ProviderServiceStatus] = [:]
+    @Published private(set) var providerStatusErrors: [UsageProvider: String] = [:]
+    @Published private(set) var providerWork: [UsageProvider: ProviderWorkSnapshot] = [:]
+    @Published private(set) var isRefreshingProviderWork = false
+    private let providerStatusService = ProviderStatusService()
+    private let providerWorkScanner = ProviderWorkScanner()
+    private var providerStatusOperations: [UsageProvider: Task<Void, Never>] = [:]
+    private var providerWorkOperation: Task<Void, Never>?
     @Published private(set) var serviceStatus: OpenAIStatusSnapshot?
     @Published private(set) var accountInsights: CodexAccountInsightsSnapshot?
     @Published private(set) var quotaPace: CodexQuotaPaceSnapshot?
+    @Published private(set) var claudeLocalUsage: ClaudeLocalUsageSnapshot?
+    @Published private(set) var claudeLocalUsageError: String?
+    @Published private(set) var isRefreshingClaudeLocal = false
+    @Published private(set) var claudeUsage: ClaudeUsageSnapshot?
+    @Published private(set) var claudeUsageError: String?
+    @Published private(set) var isRefreshingClaude = false
     @Published private(set) var cursorUsage: CursorUsageSnapshot?
     @Published private(set) var exchangeRates: CodexExchangeRateSnapshot?
     @Published private(set) var releaseUpdate: CodexReleaseUpdateSnapshot?
@@ -51,6 +65,11 @@ final class CodexUsageMonitor: ObservableObject {
     private let conversationScanner: CodexConversationScanner
     private let accountInsightsService: CodexAccountInsightsService
     private let quotaPaceStore: CodexQuotaPaceStore
+    private let claudeLocalScanner = ClaudeLocalUsageScanner()
+    private var claudeLocalOperation: Task<Void, Never>?
+    private let claudeUsageService = ClaudeUsageService()
+    private var claudeRefreshOperation: Task<Void, Never>?
+    private var scheduledClaudeUsageEnabled = true
     private let cursorUsageService: CursorUsageService
     private let currencyService: CodexCurrencyService
     private let releaseUpdateService: CodexReleaseUpdateService
@@ -90,6 +109,7 @@ final class CodexUsageMonitor: ObservableObject {
         self.releaseUpdateService = releaseUpdateService
         scheduledInterval = Self.readRefreshInterval(widgetId: widgetId)
         scheduledQuotaUsageSource = Self.readQuotaUsageSource(widgetId: widgetId)
+        scheduledClaudeUsageEnabled = Self.readClaudeUsageEnabled(widgetId: widgetId)
         scheduledCursorUsageEnabled = Self.readCursorUsageEnabled(widgetId: widgetId)
         scheduledCurrency = Self.readDisplayCurrency(widgetId: widgetId)
         scheduledReleaseUpdateMonitoring = Self.readReleaseUpdateMonitoring(widgetId: widgetId)
@@ -128,6 +148,10 @@ final class CodexUsageMonitor: ObservableObject {
     }
 
     deinit {
+        providerStatusOperations.values.forEach { $0.cancel() }
+        providerWorkOperation?.cancel()
+        claudeLocalOperation?.cancel()
+        claudeRefreshOperation?.cancel()
         refreshLoop?.cancel()
         refreshOperation?.cancel()
         conversationRefreshOperation?.cancel()
@@ -156,11 +180,14 @@ final class CodexUsageMonitor: ObservableObject {
         if scheduledCursorUsageEnabled {
             refreshCursor()
         }
+        refreshClaude()
+        refreshProviderStatuses()
         refreshExchangeRates()
         checkReleaseUpdate()
     }
 
     func refreshConversations() {
+        refreshProviderWork()
         conversationRefreshOperation?.cancel()
         isRefreshingConversations = true
         let scanner = conversationScanner
@@ -169,6 +196,79 @@ final class CodexUsageMonitor: ObservableObject {
             guard let self, !Task.isCancelled else { return }
             recentConversations = snapshot
             isRefreshingConversations = false
+        }
+    }
+
+    func refreshProviderStatuses() {
+        for provider in [UsageProvider.claude, .cursor] {
+            let enabled = provider == .claude ? scheduledClaudeUsageEnabled : scheduledCursorUsageEnabled
+            guard enabled, providerStatusOperations[provider] == nil else { continue }
+            let service = providerStatusService
+            providerStatusOperations[provider] = Task { [weak self] in
+                let result = await Self.capture { try await service.fetch(provider) }
+                guard let self, !Task.isCancelled else { return }
+                switch result {
+                case let .success(snapshot): providerStatuses[provider] = snapshot; providerStatusErrors[provider] = nil
+                case let .failure(error): providerStatusErrors[provider] = error.localizedDescription
+                }
+                providerStatusOperations[provider] = nil
+            }
+        }
+    }
+
+    func refreshProviderWork() {
+        guard !isRefreshingProviderWork else { return }
+        isRefreshingProviderWork = true
+        let scanner = providerWorkScanner
+        let claudeEnabled = scheduledClaudeUsageEnabled
+        let cursorEnabled = scheduledCursorUsageEnabled
+        providerWorkOperation = Task { [weak self] in
+            if claudeEnabled {
+                let snapshot = await scanner.scanClaude()
+                guard let self, !Task.isCancelled else { return }
+                if scheduledClaudeUsageEnabled { providerWork[.claude] = snapshot }
+            }
+            if cursorEnabled {
+                let snapshot = await scanner.scanCursor()
+                guard let self, !Task.isCancelled else { return }
+                if scheduledCursorUsageEnabled { providerWork[.cursor] = snapshot }
+            }
+            self?.isRefreshingProviderWork = false
+        }
+    }
+
+    func refreshClaudeLocal() {
+        guard scheduledClaudeUsageEnabled, !isRefreshingClaudeLocal else { return }
+        isRefreshingClaudeLocal = true
+        let scanner = claudeLocalScanner
+        claudeLocalOperation = Task { [weak self] in
+            let result = await Self.capture { try await scanner.scan() }
+            guard let self, !Task.isCancelled else { return }
+            switch result {
+            case let .success(snapshot): claudeLocalUsage = snapshot; claudeLocalUsageError = nil
+            case let .failure(error): claudeLocalUsageError = error.localizedDescription
+            }
+            isRefreshingClaudeLocal = false
+        }
+    }
+
+    func refreshClaude(allowKeychainPrompt: Bool = false) {
+        refreshClaudeLocal()
+        guard scheduledClaudeUsageEnabled, !isRefreshingClaude else { return }
+        isRefreshingClaude = true
+        let service = claudeUsageService
+        claudeRefreshOperation = Task { [weak self] in
+            let result = await Self.capture { try await service.fetch(allowKeychainPrompt: allowKeychainPrompt) }
+            guard let self, !Task.isCancelled else { return }
+            switch result {
+            case let .success(snapshot):
+                claudeUsage = snapshot
+                claudeUsageError = nil
+            case let .failure(error):
+                claudeUsageError = error.localizedDescription
+                if (error as? ClaudeUsageError)?.invalidatesSnapshot == true { claudeUsage = nil }
+            }
+            isRefreshingClaude = false
         }
     }
 
@@ -245,6 +345,7 @@ final class CodexUsageMonitor: ObservableObject {
             scheduledQuotaUsageSource = source
             if hasStarted { refresh() }
         }
+        syncClaudeUsageMonitoring()
         syncCursorUsageMonitoring()
         syncCurrencySetting()
         syncReleaseUpdateMonitoring()
@@ -254,6 +355,9 @@ final class CodexUsageMonitor: ObservableObject {
         for limit: CodexDisplayLimit,
         provider: CodexDockProvider = .codex
     ) -> CodexQuotaWindow? {
+        if provider == .claude {
+            return limit == .session ? claudeUsage?.sessionWindow : claudeUsage?.weeklyWindow
+        }
         if provider == .cursor {
             return cursorUsage?.primaryWindow
         }
@@ -322,9 +426,15 @@ final class CodexUsageMonitor: ObservableObject {
         accountInsights: CodexAccountInsightsSnapshot? = nil,
         quotaPace: CodexQuotaPaceSnapshot? = nil,
         cursorUsage: CursorUsageSnapshot? = nil,
+        claudeUsage: ClaudeUsageSnapshot? = nil,
+        claudeLocalUsage: ClaudeLocalUsageSnapshot? = nil,
         exchangeRates: CodexExchangeRateSnapshot? = nil,
-        releaseUpdate: CodexReleaseUpdateSnapshot? = nil
+        releaseUpdate: CodexReleaseUpdateSnapshot? = nil,
+        providerStatuses: [UsageProvider: ProviderServiceStatus] = [:],
+        providerWork: [UsageProvider: ProviderWorkSnapshot] = [:]
     ) {
+        self.providerStatuses = providerStatuses
+        self.providerWork = providerWork
         self.usage = usage
         serviceStatus = status
         self.recentUsage = recentUsage
@@ -332,6 +442,8 @@ final class CodexUsageMonitor: ObservableObject {
         self.accountInsights = accountInsights
         self.quotaPace = quotaPace
         self.cursorUsage = cursorUsage
+        self.claudeUsage = claudeUsage
+        self.claudeLocalUsage = claudeLocalUsage
         self.exchangeRates = exchangeRates
         self.releaseUpdate = releaseUpdate
         resolvedQuotaUsageSource = .oauth
@@ -428,6 +540,7 @@ final class CodexUsageMonitor: ObservableObject {
             scheduledQuotaUsageSource = source
             if hasStarted { refresh() }
         }
+        syncClaudeUsageMonitoring()
         syncCursorUsageMonitoring()
         syncCurrencySetting()
         syncReleaseUpdateMonitoring()
@@ -447,10 +560,52 @@ final class CodexUsageMonitor: ObservableObject {
         }
     }
 
+    private func syncClaudeUsageMonitoring() {
+        let enabled = Self.readClaudeUsageEnabled(widgetId: widgetId)
+        guard enabled != scheduledClaudeUsageEnabled else { return }
+        scheduledClaudeUsageEnabled = enabled
+        if enabled {
+            if hasStarted { refreshProviderStatuses(); refreshProviderWork() }
+        } else {
+            providerStatusOperations[.claude]?.cancel()
+            providerStatusOperations[.claude] = nil
+            providerStatuses[.claude] = nil
+            providerStatusErrors[.claude] = nil
+            providerWork[.claude] = nil
+        }
+        if enabled {
+            if hasStarted { refreshClaude() }
+        } else {
+            claudeRefreshOperation?.cancel()
+            claudeRefreshOperation = nil
+            isRefreshingClaude = false
+            claudeUsage = nil
+            claudeUsageError = nil
+            claudeLocalOperation?.cancel()
+            claudeLocalOperation = nil
+            isRefreshingClaudeLocal = false
+            claudeLocalUsage = nil
+            claudeLocalUsageError = nil
+        }
+    }
+
+    private static func readClaudeUsageEnabled(widgetId: String) -> Bool {
+        WidgetDefaults.bool(key: "claudeUsageEnabled", widgetId: widgetId, default: true)
+    }
+
     private func syncCursorUsageMonitoring() {
         let enabled = Self.readCursorUsageEnabled(widgetId: widgetId)
         guard enabled != scheduledCursorUsageEnabled else { return }
         scheduledCursorUsageEnabled = enabled
+        if enabled {
+            if hasStarted { refreshProviderStatuses(); refreshProviderWork() }
+        } else {
+            providerStatusOperations[.cursor]?.cancel()
+            providerStatusOperations[.cursor] = nil
+            providerStatuses[.cursor] = nil
+            providerStatusErrors[.cursor] = nil
+            providerWork[.cursor] = nil
+        }
         if enabled {
             if hasStarted { refreshCursor() }
         } else {

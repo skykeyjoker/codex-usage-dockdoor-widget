@@ -50,7 +50,7 @@ enum CodexPanelConfigurablePage: String, Codable, CaseIterable, Hashable, Identi
         case .overview: return CodexLocalization.text("额度总览", "Quota overview")
         case .insights: return CodexLocalization.text("用量洞察", "Usage insights")
         case .work: return CodexLocalization.text("项目与任务", "Projects & tasks")
-        case .status: return CodexLocalization.text("OpenAI 状态", "OpenAI status")
+        case .status: return CodexLocalization.text("服务状态", "Service status")
         }
     }
 
@@ -79,8 +79,8 @@ enum CodexPanelConfigurablePage: String, Codable, CaseIterable, Hashable, Identi
             )
         case .status:
             return CodexLocalization.text(
-                "ChatGPT / Codex 服务状态",
-                "ChatGPT / Codex service status"
+                "OpenAI / Claude / Cursor 服务状态",
+                "OpenAI / Claude / Cursor service status"
             )
         }
     }
@@ -155,7 +155,7 @@ enum CodexPanelCustomizationSection: String, Codable, CaseIterable, Hashable, Id
                 .conversationFooter,
             ]
         case .status:
-            return [.statusOverall, .statusChatGPT, .statusCodex, .statusFooter]
+            return [.statusOverall, .statusChatGPT, .statusCodex, .statusClaude, .statusCursor, .statusFooter]
         }
     }
 
@@ -172,7 +172,7 @@ enum CodexPanelCustomizationSection: String, Codable, CaseIterable, Hashable, Id
         case .conversations:
             return [.conversationSummary, .conversationList]
         case .status:
-            return [.statusOverall]
+            return [.statusOverall, .statusClaude, .statusCursor]
         }
     }
 }
@@ -209,6 +209,8 @@ enum CodexPanelCardID: String, Codable, Hashable, Identifiable {
     case statusOverall
     case statusChatGPT
     case statusCodex
+    case statusClaude
+    case statusCursor
     case statusFooter
 
     var id: String { rawValue }
@@ -238,10 +240,12 @@ enum CodexPanelCardID: String, Codable, Hashable, Identifiable {
         case .conversationSummary: return CodexLocalization.text("对话汇总", "Conversation summary")
         case .conversationList: return CodexLocalization.text("最近对话 / 任务", "Recent conversations / tasks")
         case .conversationFooter: return CodexLocalization.text("更新时间与操作", "Update time and actions")
-        case .statusOverall: return CodexLocalization.text("整体状态", "Overall status")
+        case .statusOverall: return CodexLocalization.text("服务卡片状态摘要", "Service card status summary")
         case .statusChatGPT: return "ChatGPT"
+        case .statusClaude: return "Claude"
+        case .statusCursor: return "Cursor"
         case .statusCodex: return "Codex"
-        case .statusFooter: return CodexLocalization.text("状态页入口", "Status page shortcut")
+        case .statusFooter: return CodexLocalization.text("刷新与状态页入口", "Refresh and status page actions")
         }
     }
 
@@ -270,6 +274,8 @@ enum CodexPanelCardID: String, Codable, Hashable, Identifiable {
         case .conversationList: return "bubble.left.and.text.bubble.right.fill"
         case .statusOverall: return "circle.circle.fill"
         case .statusChatGPT: return "bubble.left.and.bubble.right.fill"
+        case .statusClaude: return "asterisk"
+        case .statusCursor: return "cube.fill"
         case .statusCodex: return "terminal.fill"
         case .statusFooter: return "arrow.up.right.square"
         }
@@ -283,7 +289,7 @@ struct CodexPanelCardPreference: Codable, Equatable, Identifiable {
 
 struct CodexPanelCardConfiguration: Codable, Equatable {
     static let storageKey = "panelCardConfigurationV1"
-    private static let version = 3
+    private static let version = 4
 
     var schemaVersion: Int
     var preset: CodexPanelContentPreset

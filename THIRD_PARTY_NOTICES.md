@@ -5,6 +5,8 @@
 The quota-source selection and CLI RPC behavior, OAuth usage field mapping,
 credential refresh flow, local token-log aggregation, models.dev price refresh,
 long-context/Priority/cache pricing behavior, OpenAI status grouping,
+Claude Code read-only credential lookup, OAuth quota/profile field mapping,
+and native transcript usage/deduplication semantics,
 Cursor.app read-only authentication and usage endpoint mappings, and the
 Codex/Cursor provider SVG templates were
 adapted from [CodexBar](https://github.com/steipete/CodexBar), copyright 2026

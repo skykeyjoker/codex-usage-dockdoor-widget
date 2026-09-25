@@ -49,12 +49,18 @@ struct CursorUsageSnapshot: Codable, Equatable, Sendable {
     let topModels: [CursorModelUsage]
     let fetchedAt: Date
     let sourceLabel: String
+    var activityError: String? = nil
+    var activityIsPartial: Bool? = nil
 
     var displayPlan: String {
         guard let membershipType, !membershipType.isEmpty else { return "Cursor" }
         return "Cursor " + membershipType
             .replacingOccurrences(of: "_", with: " ")
             .capitalized
+    }
+
+    var hasOnDemandUsage: Bool {
+        onDemandUsedUSD > 0 || (onDemandLimitUSD ?? 0) > 0
     }
 
     var primaryWindow: CodexQuotaWindow? {
@@ -98,14 +104,20 @@ struct CursorUsageService: Sendable {
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: now)
         let startDate = calendar.date(byAdding: .day, value: -29, to: today) ?? today
-        let events = (try? await fetchUsageEvents(
-            cookieHeader: cookieHeader,
-            since: startDate,
-            until: now
-        )) ?? []
+        let events: [CursorUsageEventResponse]
+        var activityError: String?
+        var activityIsPartial = false
+        do {
+            let history = try await fetchUsageEvents(cookieHeader: cookieHeader, since: startDate, until: now)
+            events = history.events
+            activityIsPartial = history.isPartial
+        } catch {
+            events = []
+            activityError = error.localizedDescription
+        }
         let eventSummary = Self.aggregateEvents(events, calendar: calendar, today: today)
 
-        return Self.makeSnapshot(
+        var snapshot = Self.makeSnapshot(
             summary: summary,
             identity: identity,
             identityFallback: appSession.identity,
@@ -114,6 +126,9 @@ struct CursorUsageService: Sendable {
             eventSummary: eventSummary,
             now: now
         )
+        snapshot.activityError = activityError
+        snapshot.activityIsPartial = activityIsPartial
+        return snapshot
     }
 
     private func fetchIdentity(cookieHeader: String) async throws -> CursorUserInfoResponse {
@@ -144,7 +159,7 @@ struct CursorUsageService: Sendable {
         cookieHeader: String,
         since: Date,
         until: Date
-    ) async throws -> [CursorUsageEventResponse] {
+    ) async throws -> (events: [CursorUsageEventResponse], isPartial: Bool) {
         let pageSize = 1_000
         let maxPages = 50
         var pages: [[CursorUsageEventResponse]] = []
@@ -176,8 +191,8 @@ struct CursorUsageService: Sendable {
         }
 
         let events = pages.flatMap(\.self)
-        guard let expectedTotal, events.count > expectedTotal else { return events }
-        return Array(events.prefix(expectedTotal))
+        let partial = expectedTotal.map { events.count < $0 } ?? (pages.count == maxPages && pages.last?.count == pageSize)
+        return (expectedTotal.map { Array(events.prefix(max(0, $0))) } ?? events, partial)
     }
 
     private func request<Response: Decodable>(

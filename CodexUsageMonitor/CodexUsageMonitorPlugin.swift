@@ -7,8 +7,8 @@ final class CodexUsageMonitorPlugin: WidgetPlugin, DockDoorWidgetProvider {
     var iconSymbol: String { "terminal.fill" }
     var widgetDescription: String {
         CodexLocalization.text(
-            "Codex 与可选 Cursor 额度、Token 用量、任务及服务状态。",
-            "Codex and optional Cursor quota, token usage, tasks, and service status."
+            "Codex、Claude Code 与 Cursor 额度、Token 用量、任务及服务状态。",
+            "Codex, Claude Code and Cursor quota, token usage, tasks, and service status."
         )
     }
     var supportedOrientations: [WidgetOrientation] { [.horizontal, .vertical] }
@@ -18,6 +18,7 @@ final class CodexUsageMonitorPlugin: WidgetPlugin, DockDoorWidgetProvider {
     func settingsSchema() -> [WidgetSetting] {
         normalizeStoredPickerSettings()
         return [
+            .toggle(key: "claudeUsageEnabled", label: CodexLocalization.text("启用 Claude Code 数据统计", "Enable Claude Code Analytics"), defaultValue: true),
             .toggle(
                 key: "cursorUsageEnabled",
                 label: CodexLocalization.text("启用 Cursor 数据统计", "Enable Cursor Analytics"),
@@ -27,7 +28,7 @@ final class CodexUsageMonitorPlugin: WidgetPlugin, DockDoorWidgetProvider {
                 key: "dockProvider",
                 label: CodexLocalization.text("Dock 服务", "Dock Provider"),
                 options: CodexDockProvider.allCases.map(\.title),
-                defaultValue: CodexDockProvider.codex.title
+                defaultValue: CodexDockProvider.all.title
             ),
             .picker(
                 key: "displayLimit",
@@ -40,12 +41,6 @@ final class CodexUsageMonitorPlugin: WidgetPlugin, DockDoorWidgetProvider {
                 label: CodexLocalization.text("Dock 数值", "Dock Value"),
                 options: CodexDisplayMetric.allCases.map(\.title),
                 defaultValue: CodexDisplayMetric.remaining.title
-            ),
-            .picker(
-                key: "ringStyle",
-                label: CodexLocalization.text("圆环样式（单源）", "Ring Style (Single Provider)"),
-                options: CodexRingStyle.allCases.map(\.title),
-                defaultValue: CodexRingStyle.concentric.title
             ),
             .picker(
                 key: "colorTheme",

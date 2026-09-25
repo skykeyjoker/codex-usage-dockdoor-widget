@@ -6,6 +6,15 @@ struct CodexProviderOverviewView: View {
     let codexError: String?
     let cursorUsage: CursorUsageSnapshot?
     let cursorError: String?
+    var showsCursor: Bool = true
+    var claudeUsage: ClaudeUsageSnapshot? = nil
+    var claudeError: String? = nil
+    var showsClaude = false
+    var claudeLocalUsage: ClaudeLocalUsageSnapshot? = nil
+    var claudeLocalError: String? = nil
+    var isRefreshingClaudeLocal = false
+    var onSelectClaude: () -> Void = {}
+    var columnWidth: CGFloat? = nil
     let codexAccent: Color
     let cursorAccent: Color
     let onSelectCodex: () -> Void
@@ -17,8 +26,17 @@ struct CodexProviderOverviewView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             combinedUsageCard
-            codexCard
-            cursorCard
+            if let columnWidth {
+                HStack(alignment: .top, spacing: 12) {
+                    codexCard.frame(width: columnWidth)
+                    if showsClaude { claudeCard.frame(width: columnWidth) }
+                    if showsCursor { cursorCard.frame(width: columnWidth) }
+                }
+            } else {
+                codexCard
+                if showsClaude { claudeCard }
+                if showsCursor { cursorCard }
+            }
         }
     }
 
@@ -26,50 +44,83 @@ struct CodexProviderOverviewView: View {
         let costs = [
             codexRecentUsage?.last30DaysEstimatedCostUSD,
             cursorUsage?.last30DaysAPIEquivalentCostUSD,
+            showsClaude ? claudeLocalUsage?.cost : nil,
         ].compactMap { $0 }
         let totalCost = costs.isEmpty ? nil : costs.reduce(0, +)
         let totalTokens = (codexRecentUsage?.last30DaysTokens ?? 0)
             + (cursorUsage?.last30DaysTokens ?? 0)
+            + (showsClaude ? claudeLocalUsage?.tokens ?? 0 : 0)
         let coverage = CodexCostCoverage.combining([
             codexRecentUsage?.last30DaysSummary.costCoverage ?? .empty,
             cursorUsage?.costCoverage ?? .empty,
+            showsClaude ? claudeLocalUsage?.coverage ?? .empty : .empty,
         ])
 
-        return VStack(alignment: .leading, spacing: 7) {
-            HStack(spacing: 6) {
-                Image(systemName: "square.grid.2x2.fill")
-                    .foregroundStyle(codexAccent)
-                Text(CodexLocalization.text("用量与支出 · 30 天", "Usage & spend · 30 days"))
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Text(CodexLocalization.text("聚合", "Combined"))
-                    .font(.system(size: 8, weight: .semibold))
-                    .foregroundStyle(codexAccent)
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 3)
-                    .background(codexAccent.opacity(0.10), in: Capsule())
+        return Group {
+            if columnWidth != nil {
+                HStack(spacing: 18) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Label(CodexLocalization.text("用量与支出 · 30 天", "Usage & spend · 30 days"), systemImage: "square.grid.2x2.fill")
+                            .font(.system(size: 10, weight: .semibold)).foregroundStyle(.secondary)
+                        Text(formatCost(totalCost, coverage: coverage))
+                            .font(CodexTypography.tokenNumber(size: 21, weight: .bold))
+                    }
+                    Divider().frame(height: 34)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("\(formatTokens(totalTokens)) Token")
+                            .font(CodexTypography.tokenNumber(size: 13, weight: .semibold))
+                        Text(CodexLocalization.text("\(costs.count) / \(1 + (showsCursor ? 1 : 0) + (showsClaude ? 1 : 0)) 个服务有费用数据", "\(costs.count) / \(1 + (showsCursor ? 1 : 0) + (showsClaude ? 1 : 0)) providers with cost data"))
+                            .font(.system(size: 8.5)).foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 4)
+                    VStack(alignment: .trailing, spacing: 4) {
+                        Text(CodexLocalization.text("费用覆盖 ", "Cost coverage ") + (coverage.tokenPercent.map { "\(Int($0.rounded()))%" } ?? "—"))
+                            .font(.system(size: 9, weight: .medium)).foregroundStyle(codexAccent)
+                        Text(CodexLocalization.text("API 等价估算，非订阅账单", "API-equivalent estimate, not a bill"))
+                            .font(.system(size: 8.5)).foregroundStyle(.tertiary)
+                    }
+                }
+            } else {
+                VStack(alignment: .leading, spacing: 7) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "square.grid.2x2.fill")
+                            .foregroundStyle(codexAccent)
+                        Text(CodexLocalization.text("用量与支出 · 30 天", "Usage & spend · 30 days"))
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Text(CodexLocalization.text("聚合", "Combined"))
+                            .font(.system(size: 8, weight: .semibold))
+                            .foregroundStyle(codexAccent)
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 3)
+                            .background(codexAccent.opacity(0.10), in: Capsule())
+                    }
+
+                    Text(formatCost(totalCost, coverage: coverage))
+                        .font(CodexTypography.tokenNumber(size: 21, weight: .bold))
+
+                    Text(CodexLocalization.text(
+                        "\(costs.count) / \(1 + (showsCursor ? 1 : 0) + (showsClaude ? 1 : 0)) 个服务有费用数据 · \(formatTokens(totalTokens)) Token",
+                        "\(costs.count) / \(1 + (showsCursor ? 1 : 0) + (showsClaude ? 1 : 0)) services have spend data · \(formatTokens(totalTokens)) tokens"
+                    ))
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundStyle(.secondary)
+
+                    Text((["Codex"] + (showsClaude ? ["Claude"] : []) + (showsCursor ? ["Cursor"] : [])).joined(separator: " + "))
+                        .font(.system(size: 9)).foregroundStyle(.secondary)
+
+                    HStack(spacing: 5) {
+                        Text(CodexLocalization.text("费用覆盖", "Cost coverage"))
+                        Text(coverage.tokenPercent.map { "\(Int($0.rounded()))%" } ?? "—")
+                            .font(CodexTypography.tokenNumber(size: 8.5, weight: .semibold))
+                        Text("·")
+                        Text(CodexLocalization.text("API 等价估算，非订阅账单", "API-equivalent estimate, not a bill"))
+                    }
+                    .font(.system(size: 8.5, weight: .medium))
+                    .foregroundStyle(.tertiary)
+                }
             }
-
-            Text(formatCost(totalCost, coverage: coverage))
-                .font(CodexTypography.tokenNumber(size: 21, weight: .bold))
-
-            Text(CodexLocalization.text(
-                "\(costs.count) / 2 个服务有费用数据 · \(formatTokens(totalTokens)) Token",
-                "\(costs.count) / 2 services have spend data · \(formatTokens(totalTokens)) tokens"
-            ))
-                .font(.system(size: 9, weight: .medium))
-                .foregroundStyle(.secondary)
-
-            HStack(spacing: 5) {
-                Text(CodexLocalization.text("费用覆盖", "Cost coverage"))
-                Text(coverage.tokenPercent.map { "\(Int($0.rounded()))%" } ?? "—")
-                    .font(CodexTypography.tokenNumber(size: 8.5, weight: .semibold))
-                Text("·")
-                Text(CodexLocalization.text("API 等价估算，非订阅账单", "API-equivalent estimate, not a bill"))
-            }
-            .font(.system(size: 8.5, weight: .medium))
-            .foregroundStyle(.tertiary)
         }
         .padding(12)
         .background(
@@ -174,6 +225,11 @@ struct CodexProviderOverviewView: View {
                     if index > 0 { Divider().opacity(0.24) }
                     quotaRow(window, accent: cursorAccent)
                 }
+                if usage.hasOnDemandUsage {
+                    Divider().opacity(0.24)
+                    CursorOnDemandUsageView(snapshot: usage, accent: cursorAccent, compact: true)
+                    Divider().opacity(0.24)
+                }
                 providerUsageMetrics(
                     todayCost: usage.todayAPIEquivalentCostUSD,
                     todayTokens: usage.todayTokens,
@@ -247,34 +303,31 @@ struct CodexProviderOverviewView: View {
     }
 
     private func quotaRow(_ window: CodexQuotaWindow, accent: Color) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .firstTextBaseline, spacing: 5) {
-                Text(window.title)
-                    .font(.system(size: 10.5, weight: .semibold))
-                Text(CodexLocalization.text(
-                    "\(Int(window.remainingPercent.rounded()))% 剩余",
-                    "\(Int(window.remainingPercent.rounded()))% remaining"
-                ))
-                    .font(CodexTypography.tokenNumber(size: 9.5, weight: .bold))
-                    .foregroundStyle(accent)
-                Spacer(minLength: 4)
-                if window.resetAt != nil {
-                    Text(window.resetDescription())
-                        .font(.system(size: 8, weight: .medium))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+        CodexProviderQuotaRow(window: window, accent: accent, compact: true)
+    }
+
+    private var claudeCard: some View {
+        let accent = ClaudeUsagePanelView.accent(for: appearance)
+        return VStack(alignment: .leading, spacing: 10) {
+            providerHeader(brand: .claude, title: "Claude", account: claudeUsage?.accountEmail,
+                detail: claudeUsage?.plan?.capitalized, fetchedAt: claudeUsage?.fetchedAt,
+                accent: accent, action: onSelectClaude)
+            if let error = claudeError, claudeUsage == nil {
+                providerError(error, accent: accent)
+            } else if let usage = claudeUsage {
+                if let error = claudeError { providerStaleWarning(error) }
+                ForEach(Array(usage.windows.enumerated()), id: \.element.id) { index, window in
+                    if index > 0 { Divider().opacity(0.24) }
+                    quotaRow(window, accent: accent)
                 }
+            } else {
+                providerLoading
             }
-            GeometryReader { proxy in
-                ZStack(alignment: .leading) {
-                    Capsule().fill(Color.primary.opacity(0.09))
-                    Capsule()
-                        .fill(accent)
-                        .frame(width: proxy.size.width * window.remainingRatio)
-                }
-            }
-            .frame(height: 6)
+            ClaudeLocalUsageView(snapshot: claudeLocalUsage, error: claudeLocalError,
+                isRefreshing: isRefreshingClaudeLocal, compact: true)
         }
+        .padding(12)
+        .background(CodexGlassCard(cornerRadius: 13))
     }
 
     private func providerUsageMetrics(
@@ -367,7 +420,7 @@ struct CodexProviderOverviewView: View {
 
 }
 
-private struct ProviderUsageBar: Identifiable {
+struct ProviderUsageBar: Identifiable {
     let id: String
     let tokens: Int
     let inputTokens: Int
@@ -379,7 +432,7 @@ private struct ProviderUsageBar: Identifiable {
     let meteredCostUSD: Double?
 }
 
-private struct CodexProviderUsageBars: View {
+struct CodexProviderUsageBars: View {
     let bars: [ProviderUsageBar]
     let accent: Color
     let testingID: String

@@ -40,9 +40,6 @@ struct CursorUsagePanelView: View {
                 }
                 quotaCard(snapshot)
                 usageCard(snapshot)
-                if snapshot.onDemandUsedUSD > 0 || (snapshot.onDemandLimitUSD ?? 0) > 0 {
-                    onDemandCard(snapshot)
-                }
                 if !snapshot.topModels.isEmpty {
                     topModelsCard(snapshot)
                 }
@@ -138,57 +135,18 @@ struct CursorUsagePanelView: View {
                 }
                 quotaRow(window)
             }
+            if snapshot.hasOnDemandUsage {
+                Divider().opacity(colorScheme == .dark ? 0.22 : 0.32)
+                    .padding(.vertical, 10)
+                CursorOnDemandUsageView(snapshot: snapshot, accent: accent)
+            }
         }
         .padding(11)
         .background(CodexGlassCard(cornerRadius: 13))
     }
 
     private func quotaRow(_ window: CodexQuotaWindow) -> some View {
-        VStack(alignment: .leading, spacing: 7) {
-            HStack(alignment: .firstTextBaseline) {
-                Text(window.title)
-                    .font(.system(size: 11.5, weight: .semibold))
-                Text(CodexLocalization.text(
-                    "\(Int(window.remainingPercent.rounded()))% 剩余",
-                    "\(Int(window.remainingPercent.rounded()))% remaining"
-                ))
-                    .font(CodexTypography.tokenNumber(size: 10.5, weight: .bold))
-                    .foregroundStyle(accent)
-                Spacer(minLength: 5)
-                if window.resetAt != nil {
-                    Text(window.resetDescription())
-                        .font(.system(size: 8.5, weight: .medium))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-            }
-
-            GeometryReader { proxy in
-                ZStack(alignment: .leading) {
-                    Capsule().fill(Color.primary.opacity(colorScheme == .dark ? 0.10 : 0.075))
-                    Capsule()
-                        .fill(accent)
-                        .frame(width: proxy.size.width * window.remainingRatio)
-                    HStack(spacing: 0) {
-                        ForEach(0..<3, id: \.self) { _ in
-                            Spacer()
-                            Rectangle()
-                                .fill(Color(nsColor: .windowBackgroundColor).opacity(0.88))
-                                .frame(width: 1.5)
-                        }
-                        Spacer()
-                    }
-                }
-            }
-            .frame(height: 7)
-
-            Text(CodexLocalization.text(
-                "已用 \(Int(window.usedPercent.rounded()))% · 持续到重置",
-                "\(Int(window.usedPercent.rounded()))% used · continues until reset"
-            ))
-                .font(.system(size: 8.5, weight: .medium))
-                .foregroundStyle(.secondary)
-        }
+        CodexProviderQuotaRow(window: window, accent: accent)
     }
 
     private func usageCard(_ snapshot: CursorUsageSnapshot) -> some View {
@@ -443,47 +401,6 @@ struct CursorUsagePanelView: View {
         formatter.dateStyle = .medium
         formatter.timeStyle = .none
         return formatter.string(from: date)
-    }
-
-    private func onDemandCard(_ snapshot: CursorUsageSnapshot) -> some View {
-        let limit = snapshot.onDemandLimitUSD ?? 0
-        let ratio = limit > 0 ? min(1, max(0, snapshot.onDemandUsedUSD / limit)) : 0
-        return VStack(alignment: .leading, spacing: 8) {
-            Label(CodexLocalization.text("额外用量", "On-demand usage"), systemImage: "creditcard.fill")
-                .font(.system(size: 11.5, weight: .bold))
-                .foregroundStyle(.secondary)
-            GeometryReader { proxy in
-                ZStack(alignment: .leading) {
-                    Capsule().fill(Color.primary.opacity(0.09))
-                    Capsule().fill(accent).frame(width: proxy.size.width * ratio)
-                }
-            }
-            .frame(height: 7)
-            HStack {
-                Text(limit > 0
-                    ? "\(currency(snapshot.onDemandUsedUSD)) / \(currency(limit))"
-                    : currency(snapshot.onDemandUsedUSD))
-                Spacer()
-                if limit > 0 {
-                    Text(CodexLocalization.text(
-                        "已使用 \(Int((ratio * 100).rounded()))%",
-                        "\(Int((ratio * 100).rounded()))% used"
-                    ))
-                }
-            }
-            .font(CodexTypography.tokenNumber(size: 9.5, weight: .medium))
-            .foregroundStyle(.secondary)
-            if let personal = snapshot.personalOnDemandUsedUSD {
-                Text(CodexLocalization.text(
-                    "当前账户个人用量：\(currency(personal))",
-                    "Personal usage for this account: \(currency(personal))"
-                ))
-                    .font(.system(size: 8.5, weight: .medium))
-                    .foregroundStyle(.tertiary)
-            }
-        }
-        .padding(11)
-        .background(CodexGlassCard(cornerRadius: 13))
     }
 
     private func topModelsCard(_ snapshot: CursorUsageSnapshot) -> some View {

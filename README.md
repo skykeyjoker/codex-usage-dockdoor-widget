@@ -2,134 +2,75 @@
 
 An unofficial, feature-rich Codex usage widget for
 [DockDoor Pro](https://dockdoor.net/). It brings quota, activity, local Token
-analytics, projects/tasks, context health, and OpenAI service status into the
+analytics, projects/tasks, context health, and multi-provider service status into the
 Dock and a native SwiftUI panel. It can also read an existing Cursor.app
-session to show Cursor quota and aggregate usage alongside Codex.
+session to show Cursor quota and aggregate usage alongside Codex. Claude Code subscription quota is also supported through its existing local sign-in.
 
 > This widget is distributed independently and is not part of the DockDoor Pro
 > marketplace. Installation is manual.
 
-## What's new in 2.1.0
+## What's new in 2.6.0
 
-- Added Cursor as an optional second provider with account, plan, Total/Cursor/
-  Third Party/Grok Bot quota, on-demand usage, 30-day Token/cost activity, and
-  model details from the existing Cursor.app session.
-- Added Overview/Codex/Cursor Panel navigation and a combined 30-day spend and
-  quota overview with pointer-following chart details.
-- Added Codex, Cursor, and combined Dock modes. Combined mode uses an adaptive
-  dual-track ring across one-, two-, and three-slot horizontal/vertical layouts.
-- Added USD, CNY, EUR, GBP, JPY, HKD, KRW, CAD, AUD, SGD, and CHF display
-  currencies using cached ECB working-day reference rates.
-- Added official provider marks, clearer Settings sections, a Cursor analytics
-  switch, stronger data-health reporting, and consistent footer hover actions.
+The first public release after 2.1.0 adds Claude Code and extends the widget across three providers:
 
-## 2.0.0 highlights
+- **Quota:** Claude account/plan, session/weekly/model-specific limits; exact reset timestamps and countdowns; Cursor on-demand usage in quota cards.
+- **Dock:** independent provider bars and cards replace rings, with consistent percentage typography in every slot size and orientation.
+- **Panel:** wide quota Overview, content-sized pages within the screen, smooth transitions and native DockDoor window placement.
+- **Service status:** matching OpenAI / Claude / Cursor cards, six-service previews, expandable lists and always-visible affected/unknown services.
+- **Projects & Tasks:** provider selection, local Claude / Cursor projects and conversations, resume-command copying, project opening and saved Cursor context/code-change counts.
+- **Insights:** Claude today / 7-day / 30-day local analytics; Cursor official 30-day trends, models, token mix and reported amounts; explicit data-source limits and fetch-error states.
 
-- Added configurable Panel presets and per-page/per-card visibility and order.
-- Added All-time local analytics, hourly activity, projects/tasks, context
-  health, task efficiency, GitHub update monitoring, and quick launch actions.
-- Migrated local aggregation to an incremental SQLite WAL cache and expanded
-  models.dev pricing, coverage, Fast/Priority, cache, and long-context support.
+| Provider | Official activity | Local insights |
+| --- | --- | --- |
+| Codex | Account totals, streaks, trends and activity heatmap | Token/cost, hourly activity, projects, context and task metrics |
+| Claude | Personal Pro / Max plans currently lack official analytics | Token/cost estimates, daily/hourly activity, token mix and period-matched models |
+| Cursor | 30-day account events, token/model breakdown and reported amounts | Saved conversations, projects and context samples; no invented local token billing |
 
-<p align="center">
-  <img src="assets/dock-layouts.png" width="740" alt="One-, two-, and three-slot Dock layouts">
-</p>
+See [CHANGELOG.md](CHANGELOG.md) for the full release history.
 
-## Highlights
+![Three-provider quota overview with synthetic data](assets/wide-overview-light.png)
 
-- Overview/Codex/Cursor switch in the Panel: the Overview tab combines both
-  providers' 30-day spend, Token totals, quota, usage trend, and top model.
-- Official Codex and Cursor vector marks, plus configurable Codex, Cursor, or
-  combined quota presentation for all three Dock slot sizes.
-- Optional combined Dock presentation with a Codex outer track and Cursor
-  inner track, expanding to provider rows and independent reset times in wider
-  slot sizes.
-- Cursor account and plan, Total/Cursor/Third Party/Grok Bot quota windows,
-  on-demand usage, 30-day Token and cost summaries, daily chart, and top models.
-- One-, two-, and three-slot Dock layouts, including classic, concentric,
-  segmented, and automatically rotating single-slot rings.
-- Session and weekly quota with used/remaining modes, reset time, pace hints,
-  reset credits, and optional extra-model quota cards.
-- Recent Token usage and API-equivalent cost estimates with interactive charts.
-- Official Codex activity: lifetime usage, peak day, streaks, activity heatmap,
-  and daily/weekly/cumulative trends.
-- Local usage insights: 7/30-day totals, requests, active days, cache/Fast mix,
-  model breakdown, project breakdown, and period comparison.
-- Recent projects and conversations/tasks, Codex deep links, context health,
-  TTFT, average task duration, completed/aborted turns, and compactions.
-- Simplified/full presets plus per-page and per-card visibility/order controls,
-  so casual and advanced users can choose how much information each Panel page
-  shows.
-- Configurable Token-number formatting and an optional quick-launch bar for
-  GPT Classic, Codex Desktop, and Codex CLI.
-- ChatGPT and Codex component status from `status.openai.com`.
-- Automatic English/Chinese UI, light/dark appearance support, and seven color themes.
-- Universal bundle for both Apple Silicon (`arm64`) and Intel (`x86_64`) Macs.
+### Connect Claude Code
+
+1. Install Claude Code and run `claude auth login` (or `~/.local/bin/claude auth login` if it is not on PATH).
+2. Enable **Claude Code analytics** in widget settings.
+3. Set **Dock provider → All providers** to include Claude alongside Codex and Cursor. Existing provider choices are preserved when upgrading.
+4. Open **Settings → Claude Code → Authorize sign-in access** if macOS Keychain permission is required. Background refreshes never trigger a Keychain permission prompt.
+
+The widget reads `~/.claude/.credentials.json` or the `Claude Code-credentials` Keychain item and sends the access token only to the Anthropic OAuth `/api/oauth/usage` and `/api/oauth/profile` endpoints. Credentials are never stored in widget preferences or refreshed/written by this widget. Expired sign-in must be renewed by Claude Code. Custom `CLAUDE_CONFIG_DIR` / `CLAUDE_SECURESTORAGE_CONFIG_DIR` file profiles are supported when inherited by DockDoor; a custom profile never falls back to the default account's Keychain item. Claude snapshots are held in memory only.
+
+This is subscription quota, not API credits. API-key-only accounts, organizational restrictions, or upstream response changes may leave quota unavailable. Login success and live quota availability must be verified on the target machine.
 
 ## Screenshots
 
-All screenshots below are rendered from the current SwiftUI implementation
-with anonymous fixture data. They do not contain a real account, project path,
-or conversation.
+These previews use anonymous fixture data, not a real account or conversation.
 
-### Quota and recent usage
+### Unified service status
 
-| Light | Dark |
-| --- | --- |
-| <img src="assets/panel-overview.png" width="360" alt="Quota overview in light appearance"> | <img src="assets/panel-overview-dark.png" width="360" alt="Quota overview in dark appearance"> |
-
-The overview combines account and service health, session/weekly quota,
-reset timing, pace information, recent Token usage, estimated cost, reset
-credits, and optional extra-model quota cards.
+![OpenAI, Claude and Cursor service cards](assets/providers-status-light.png)
 
 ### Usage insights
 
-| Official activity | Local usage |
+| Claude local usage | Cursor official activity |
 | --- | --- |
-| <img src="assets/panel-insights-official.png" width="360" alt="Official Codex activity"> | <img src="assets/panel-insights-local.png" width="360" alt="Local Codex usage insights"> |
+| <img src="assets/claude-insights-local-light.png" width="360" alt="Claude local token and cost insights"> | <img src="assets/cursor-insights-official-dark.png" width="360" alt="Cursor official activity insights"> |
 
-- **Official activity** is requested from the installed Codex CLI app-server:
-  lifetime Tokens, daily peak, streaks, longest task, one-year activity heatmap,
-  and daily/weekly/cumulative trends.
-- **Local usage** is calculated from local Codex session logs: Token mix,
-  equivalent API cost, requests, active days, cache hit rate, Fast/Priority
-  share, models, and period-over-period change.
+### Local projects and conversations
 
-### Projects and tasks
+![Claude projects](assets/claude-projects-light.png)
 
-| Projects | Conversations / tasks |
-| --- | --- |
-| <img src="assets/panel-projects.png" width="360" alt="Project usage summaries"> | <img src="assets/panel-conversations.png" width="360" alt="Recent conversations and task health"> |
-
-Project rows summarize local usage, sessions, requests, and activity. The
-conversation/task view adds local titles, active/history state, Codex deep
-links, context-window health, reasoning/compaction information, TTFT, average
-duration, and aborted-turn counts. Hovering a conversation smoothly switches
-the health cards to that session; a compact floating HUD keeps those metrics
-visible while the list is scrolled. CLI-origin conversations resume through
-the selected terminal, while Desktop-origin conversations open in Codex.
-
-### Service status and settings
-
-| OpenAI status | Settings and data health |
-| --- | --- |
-| <img src="assets/panel-status.png" width="360" alt="ChatGPT and Codex service status"> | <img src="assets/panel-settings.png" width="360" alt="Widget settings and data health"> |
-
-The settings page controls the Dock quota/value, ring style across all slot
-sizes, theme, Dock service-status indicator, Token format, Panel content
-presets, page/card visibility and order, quick-launch buttons, preferred
-terminal, quota source, refresh interval, links, and per-source health
-diagnostics.
+The Codex views retain project usage, context health and task efficiency. Claude and Cursor show the metadata available from their local histories. Claude sessions offer a copyable resume command; Cursor offers project opening and a copyable conversation ID.
 
 ## Requirements
 
 - macOS 14 or later.
 - DockDoor Pro with local widget support. This release was tested with DockDoor
-  Pro 1.1.2.
+  Pro 1.5.0.
 - A current [Codex CLI](https://learn.chatgpt.com/docs/codex/cli) installation.
 - For quota and account activity, sign in with Codex first.
 - Cursor data is optional. To enable it, install Cursor.app and sign in there;
   the widget reads that existing local session without modifying it.
+- Claude data is optional. Install Claude Code and sign in to a supported subscription.
 - Xcode Command Line Tools are needed only when building from source.
 
 ## Install a release
@@ -191,22 +132,42 @@ DOCKDOOR_WIDGETS_REPOSITORY=/path/to/dockdoorpro-widgets.git ./scripts/build.sh
 The script rejects a bundle unless its executable contains both `arm64` and
 `x86_64` slices.
 
+## Claude local history
+
+Native assistant usage metadata is read from `$CLAUDE_CONFIG_DIR/projects` when configured; otherwise from `~/.claude/projects`, `~/.config/claude/projects` and the Claude Desktop `claude-code-sessions` / `local-agent-mode-sessions` directories under Application Support. Available `.jsonl` records are deduplicated by request/message identity, or session/message identity when request IDs are absent. Only aggregate usage metadata is retained in memory; prompts/tool outputs are not retained, cached or uploaded. Unchanged files reuse parsed metadata; changed files are reread, and deleted files leave the totals.
+
+Statistics cover this machine's last 30 local calendar days and can include more than one account. They are not an account-wide subscription bill. Pricing uses the existing cached models.dev catalog and only its Anthropic provider; unknown rates, unsupported fast modes are unpriced rather than guessed. Cost coverage and partial estimates identify these limits. No transcript files means unavailable local history, not measured zero usage.
+
+## Validation
+
+```bash
+./scripts/test-claude.sh
+./scripts/test-claude.sh --render /absolute/path/to/previews
+# Optional: read live quota using local credentials (never prints tokens).
+./scripts/test-claude.sh --live
+# Optional: verify live local/provider history and official endpoints.
+./scripts/test-claude.sh --live-insights
+./scripts/test-claude.sh --live-provider-pages
+```
+
+Set `DOCKDOOR_WIDGETS_SOURCE=/path/to/dockdoorpro-widgets` to use an existing SDK checkout. Otherwise the test script obtains the upstream build SDK in a temporary directory. Tests cover quota parsing, credential/expiry handling, scoped limits, rate-limit backoff, token deduplication and pricing, model/hour/period consistency, current/legacy Cursor indices, official-event error states, status previews, settings compatibility and host-owned window geometry. Preview data is synthetic.
+
 ## Configuration
 
 | Setting | Choices | Effect |
 | --- | --- | --- |
-| Cursor analytics | On / Off | Enables Cursor.app authentication and Cursor network refreshes. Off removes multi-provider tabs and keeps quota surfaces on Codex only. |
-| Dock provider | Codex / Cursor / Codex + Cursor | Selects one provider or the adaptive dual-track presentation. Combined mode requires Cursor analytics. |
+| Cursor analytics | On / Off | Enables Cursor.app authentication and Cursor network refreshes. Off hides Cursor and stops Cursor requests; Claude can remain enabled. |
+| Dock provider | Codex / Claude / Cursor / Codex + Cursor / All providers | Shows enabled providers as independent quota bars or cards. |
+| Claude Code analytics | On / Off | Enables Claude quota, local usage, project metadata and service status. |
 | Primary quota | Weekly / Session | Selects the quota shown in the Dock. |
 | Value | Remaining / Used | Selects percentage semantics. |
-| Ring Style | Classic / Concentric / Segmented / Auto Carousel | Changes single-provider layouts. Combined mode uses a fixed dual-track ring and temporarily suppresses style/carousel changes. |
 | Theme | System Accent, Codex Teal, Ocean, Violet, Blue Magenta, Mint, Sunset | Applies adaptive light/dark highlights. |
 | Show service status | On / Off | Adds the current OpenAI health indicator to the Dock. |
 | Token format | Automatic / Exact / Millions (2 decimals) / Millions (1 decimal) / Billions (2 decimals) | Controls Token-number rounding throughout the Panel. |
 | Display currency | USD / CNY / EUR / GBP / JPY / HKD / KRW / CAD / AUD / SGD / CHF | Converts USD-denominated estimates throughout the Panel using the latest cached ECB working-day reference rates. |
-| Hourly activity range | This week / Last year | Switches both the heatmap data and its range label; defaults to This week. |
+| Codex hourly activity range | This week / Last year | Switches the Codex heatmap data and range label; Claude uses the selected local-insights period. |
 | Panel content preset | Simplified / Full / Custom | Applies a compact default, shows every card, or preserves individual choices. |
-| Page visibility | Quota overview / Usage insights / Projects & tasks / OpenAI status | Hides entire content pages while keeping at least one page available. |
+| Page visibility | Quota overview / Usage insights / Projects & tasks / Service status | Hides entire content pages while keeping at least one page available. |
 | Card visibility and order | Per Panel section | Chooses and reorders cards while keeping at least one card in each visible section. |
 | Bottom quick-launch bar | On / Off | Shows or hides the persistent launcher at the bottom of the Panel. |
 | Quick-launch buttons | GPT Classic / Codex Desktop / Codex CLI | Independently selects which launch targets appear. |
@@ -244,6 +205,10 @@ however, use the following local and remote sources to provide its features.
 | `https://chatgpt.com/backend-api/accounts/{account}/spend-controls/current-user/monthly-usage` | Administrator monthly usage and limit | Business/Team/EDU/Enterprise monthly quota fallback | Bearer-authenticated direct request to OpenAI for eligible workspace plans. |
 | `https://models.dev/api.json` | Public model price catalog | API-equivalent cost estimates | Anonymous request; bundled prices are the fallback. |
 | `https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml` | Official daily EUR reference rates | Converts USD-denominated estimates to the selected display currency | Anonymous request only when a non-USD currency is selected. Checked at most every 12 hours and cached locally; no quota or usage data is sent. |
+| Claude Code credentials file / Keychain | Existing subscription access token | Claude quota/profile | Read-only; only sent directly to Anthropic OAuth usage/profile endpoints. No background Keychain prompts or token refresh writes. |
+| Claude Code native session logs | Usage/model/cache metadata, title or first-message excerpt, project path and timestamps | Local analytics and project/conversation lists | Read locally; usage metadata and display titles stay in memory. No transcript upload. |
+| Cursor `composerHeaders` and workspace indices | Conversation titles, project paths, last-updated time, saved context/code-change metadata | Local projects/conversations/insights | SQLite is opened read-only; no conversation content is uploaded. |
+| `https://status.claude.com/api/v2/summary.json` and `https://status.cursor.com/api/v2/summary.json` | Public component status and active incidents | Claude/Cursor service cards | Anonymous requests. |
 | `https://status.openai.com` | Overall and component status | ChatGPT/Codex service-status page and Dock indicator | Anonymous request. |
 | GitHub Releases API and `/releases/latest` redirect | Latest stable tag, name, URL, and publish time when available | Optional release-update reminder in Settings | Anonymous request, enabled by default and throttled to at most once every 12 hours. The redirect is the API rate-limit fallback; no local widget data is sent. |
 
@@ -309,7 +274,7 @@ removes unrelated DockDoor Pro settings, so it is not recommended.
 - `models.dev` is preferred; a built-in OpenAI price table is the fallback.
 - Partial cost estimates are prefixed with `~` and report priced Token/request
   coverage instead of presenting incomplete totals as complete bills.
-- Local history uses a pinned Gregorian/IANA-time-zone scan, retains up to 365
+- Codex local history uses a pinned Gregorian/IANA-time-zone scan, retains up to 365
   days, and exposes 7-day, 30-day, and All-time summaries plus hourly activity.
 - Local counts depend on the fields present in the installed Codex version and
   available session history. Archived or deleted logs cannot be reconstructed.
@@ -372,3 +337,7 @@ CodexBar attribution and DockDoor Pro SDK terms.
 Thanks to the DockDoor Pro project for the widget platform and to
 [CodexBar](https://github.com/steipete/CodexBar) for its MIT-licensed quota and
 cost-usage compatibility work.
+
+Claude local analytics cover 30 local calendar days; the project browser reads up to 200 recent session files. Cursor local project/conversation metadata reads up to 500 headers. Cursor official charts cover token-bearing account events over 30 days; an unavailable or truncated fetch is labeled explicitly.
+
+[Claude personal Pro / Max analytics availability](https://support.claude.com/en/articles/12157520-claude-code-usage-analytics) and [Cursor analytics documentation](https://cursor.com/docs/account/teams/analytics) describe the upstream data limits. Cursor internal storage/dashboard formats and Claude OAuth quota fields can change independently of this widget.

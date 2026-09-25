@@ -4,6 +4,7 @@ import SwiftUI
 enum CodexProviderBrand {
     case codex
     case cursor
+    case claude
 }
 
 /// Official provider marks rendered from the SVG templates used by CodexBar.
@@ -15,7 +16,9 @@ struct CodexProviderIcon: View {
 
     var body: some View {
         Group {
-            if let image = CodexProviderIconAssets.image(for: brand) {
+            if brand == .claude {
+                Image(systemName: "asterisk").font(.system(size: size, weight: .heavy))
+            } else if let image = CodexProviderIconAssets.image(for: brand) {
                 Image(nsImage: image)
                     .resizable()
                     .renderingMode(.template)
@@ -105,6 +108,7 @@ private enum CodexProviderIconAssets {
         switch brand {
         case .codex: codex
         case .cursor: cursor
+        case .claude: nil
         }
     }
 

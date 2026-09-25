@@ -1021,17 +1021,22 @@ enum CodexDockProvider: String, CaseIterable, Identifiable {
     case codex
     case cursor
     case both
+    case claude
+    case all
 
     var id: String { rawValue }
     var title: String {
         switch self {
         case .codex: "Codex"
         case .cursor: "Cursor"
+        case .claude: "Claude"
+        case .all: CodexLocalization.text("全部服务", "All providers")
         case .both: CodexLocalization.text("同时展示", "Codex + Cursor")
         }
     }
 
     static func resolve(title: String) -> CodexDockProvider {
+        if ["all", "全部服务", "All providers"].contains(title) { return .all }
         if ["both", "同时展示", "Codex + Cursor", "Both"].contains(title) {
             return .both
         }

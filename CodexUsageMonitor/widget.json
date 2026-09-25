@@ -2,9 +2,12 @@
     "id": "codex-usage-monitor",
     "name": "Codex Usage",
     "author": "Skykey",
-    "description": "Monitor Codex and Cursor quota, usage, costs, projects, tasks, and service status.",
+    "description": "Monitor Codex, Claude Code and Cursor quota, usage, costs, projects and tasks.",
     "iconSymbol": "terminal.fill",
-    "orientations": ["horizontal", "vertical"],
+    "orientations": [
+        "horizontal",
+        "vertical"
+    ],
     "maxSlotSpan": 3,
     "principalClass": "CodexUsageMonitorPlugin",
     "sources": [
@@ -28,6 +31,18 @@
         "CodexPanelCustomization.swift",
         "CodexOfficialActivityView.swift",
         "CodexLocalInsightsView.swift",
-        "CodexUsageMonitorPanel.swift"
+        "CodexUsageMonitorPanel.swift",
+        "ClaudeUsageService.swift",
+        "ClaudeUsagePanelView.swift",
+        "CodexProviderQuotaRow.swift",
+        "ClaudeLocalUsageScanner.swift",
+        "ClaudeLocalUsageView.swift",
+        "CursorOnDemandUsageView.swift",
+        "CodexPanelWindowSizing.swift",
+        "ProviderServiceStatus.swift",
+        "ProviderWorkScanner.swift",
+        "ProviderWorkView.swift",
+        "ProviderStatusView.swift",
+        "ProviderInsightsView.swift"
     ]
 }
